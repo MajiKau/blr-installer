@@ -1,0 +1,9 @@
+{
+  "zip_url": "https://ddd-cloud.com/blrzip",
+  "launch_args": [
+    "-zcureurl=blrrevive.ddd-game.de",
+    "-zcureport=80",
+    "-presenceurl=blrrevive.ddd-game.de",
+    "-presenceport=9004"
+  ]
+}
