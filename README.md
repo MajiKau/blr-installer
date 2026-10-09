@@ -51,10 +51,16 @@ use the defaults shown above, or set it to an empty array for no launch argument
 
 ## Run
 
-Python 3 must be installed.
+Python 3 and the GUI dependency must be installed:
+
+```powershell
+python -m pip install -r requirements.txt
+```
 
 - **GUI:** `py installer.py` on Windows or `python3 installer.py` on Linux.
 - **Terminal:** add `--cli` to either command.
+
+The GUI uses ttkbootstrap's built-in `pydata-dark` theme.
 
 The GUI allows choosing the Steam option and install folder, shows download and
 extraction progress, and can pause/resume an installation. Closing the GUI while

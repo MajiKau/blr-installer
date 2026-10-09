@@ -6,7 +6,9 @@ import threading
 import tkinter as tk
 import zipfile
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox
+
+import ttkbootstrap as ttk
 
 from installer_config import STEAM_OPTIONS, load_zip_url
 from installer_download import (
@@ -22,7 +24,7 @@ from installer_ui import launch_game
 
 
 class InstallerWindow:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: ttk.App) -> None:
         self.root = root
         self.root.title("Blacklight Retribution Installer")
         self.root.minsize(520, 300)
@@ -95,6 +97,7 @@ class InstallerWindow:
             frame,
             text="Browse...",
             command=self._browse_destination,
+            bootstyle="primary",
         )
         self.browse_button.grid(row=4, column=1, padx=(8, 0))
 
@@ -116,6 +119,7 @@ class InstallerWindow:
             text="Launch game",
             command=self._launch_game,
             state="disabled",
+            bootstyle="success",
         )
         self.launch_button.pack(side="left", padx=(0, 8))
         self.pause_button = ttk.Button(
@@ -123,12 +127,14 @@ class InstallerWindow:
             text="Pause",
             command=self._pause,
             state="disabled",
+            bootstyle="warning",
         )
         self.pause_button.pack(side="left", padx=(0, 8))
         self.start_button = ttk.Button(
             actions,
             text="Install",
             command=self._start_install,
+            bootstyle="danger",
         )
         self.start_button.pack(side="left")
         frame.columnconfigure(0, weight=1)
@@ -343,7 +349,7 @@ class InstallerWindow:
 
 
 def run_gui() -> None:
-    root = tk.Tk()
+    root = ttk.App(theme="bootstrap-dark")
     InstallerWindow(root)
     if root.winfo_exists():
         root.mainloop()
