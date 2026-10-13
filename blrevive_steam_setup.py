@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Configure a BLRevive non-Steam shortcut and Proton Experimental on Linux.
+Configure a BLRevive non-Steam shortcut in Steam.
 
 Requirements:
     python3 -m pip install vdf
@@ -18,22 +18,24 @@ using on a valuable Steam configuration.
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import os
 import shutil
-import struct
 import subprocess
 import sys
 import tempfile
 import time
 import zlib
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     import vdf
 except ImportError:
-    print("Missing dependency. Install it with: python3 -m pip install vdf", file=sys.stderr)
-    raise SystemExit(2)
+    vdf = None
+
+from installer_errors import InstallationPaused
 
 
 APP_NAME = "BLRevive"
@@ -62,15 +64,49 @@ SHORTCUT_DEFAULTS: dict[str, Any] = {
 }
 
 
+def _print(*args: object, **kwargs: Any) -> None:
+    if sys.stdout is not None:
+        print(*args, **kwargs)
+
+
 def steam_roots() -> list[Path]:
-    """Common native and Flatpak Steam roots, deduplicated by resolved path."""
+    """Common Steam roots, deduplicated by resolved path."""
     home = Path.home()
-    candidates = [
-        home / ".steam" / "steam",
-        home / ".steam" / "root",
-        home / ".local" / "share" / "Steam",
-        home / ".var" / "app" / "com.valvesoftware.Steam" / ".local" / "share" / "Steam",
-    ]
+    if sys.platform == "win32":
+        candidates: list[Path] = []
+        try:
+            import winreg
+
+            for hive, key_name in (
+                (winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam"),
+            ):
+                try:
+                    with winreg.OpenKey(hive, key_name) as key:
+                        for value_name in ("SteamPath", "InstallPath"):
+                            try:
+                                install_path, _ = winreg.QueryValueEx(key, value_name)
+                            except OSError:
+                                continue
+                            candidates.append(Path(os.path.expandvars(install_path)))
+                except OSError:
+                    continue
+        except ImportError:
+            pass
+        candidates.extend(
+            Path(os.environ[env]) / "Steam"
+            for env in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA")
+            if os.environ.get(env)
+        )
+        candidates.extend((home / "AppData" / "Local" / "Steam", home / "Steam"))
+    else:
+        candidates = [
+            home / ".steam" / "steam",
+            home / ".steam" / "root",
+            home / ".local" / "share" / "Steam",
+            home / ".var" / "app" / "com.valvesoftware.Steam" / ".local" / "share" / "Steam",
+        ]
     found: list[Path] = []
     seen: set[str] = set()
     for path in candidates:
@@ -88,7 +124,22 @@ def steam_roots() -> list[Path]:
 
 
 def steam_appears_running() -> bool:
-    """Best-effort Linux process check; avoid editing files Steam may overwrite."""
+    """Check whether Steam is running before editing files it may overwrite."""
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq steam.exe", "/FO", "CSV", "/NH"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise RuntimeError(f"Could not check whether Steam is running: {exc}") from exc
+        return any(
+            row and row[0].lower() == "steam.exe"
+            for row in csv.reader(io.StringIO(result.stdout))
+        )
+
     proc = Path("/proc")
     if not proc.is_dir():
         return False
@@ -108,6 +159,44 @@ def steam_appears_running() -> bool:
         if "com.valvesoftware.steam" in cmdline and "blrevive_steam_setup.py" not in cmdline:
             return True
     return False
+
+
+def ensure_steam_closed(
+    on_prompt: Callable[[], bool] | None = None,
+) -> None:
+    """Wait for Steam to close, prompting only when shortcut setup is imminent."""
+    if not steam_appears_running():
+        return
+
+    if on_prompt is None:
+        _print(
+            "Steam must be fully closed before adding the library shortcut. "
+            "Close Steam, including its tray process."
+        )
+        while True:
+            answer = input(
+                "Press Enter to check again, or type 'c' to pause installation: "
+            ).strip().lower()
+            if answer == "c":
+                raise InstallationPaused
+            if not steam_appears_running():
+                return
+            _print("Steam is still running. Exit it completely and try again.")
+
+    while True:
+        if not on_prompt():
+            raise InstallationPaused
+        if not steam_appears_running():
+            return
+
+
+def _require_vdf() -> Any:
+    if vdf is None:
+        raise RuntimeError(
+            "The VDF package is required to configure Steam. "
+            "Install the installer's dependencies and try again."
+        )
+    return vdf
 
 
 def choose_steam_root(roots: list[Path], requested: str | None) -> Path:
@@ -193,10 +282,11 @@ def atomic_write(path: Path, writer) -> None:
 
 
 def read_binary_shortcuts(path: Path) -> dict[str, Any]:
+    vdf_module = _require_vdf()
     if not path.exists() or path.stat().st_size == 0:
         return {"shortcuts": {}}
     with path.open("rb") as fp:
-        data = vdf.binary_load(fp)
+        data = vdf_module.binary_load(fp)
     if not isinstance(data, dict):
         raise RuntimeError(f"Unexpected binary VDF structure in {path}")
     shortcuts = data.get("shortcuts")
@@ -297,22 +387,23 @@ def write_shortcut(shortcuts_file: Path, exe_path: Path, game_app_id: str, launc
 
     backup = backup_file(shortcuts_file)
     if backup:
-        print(f"Backed up shortcuts: {backup}")
+        _print(f"Backed up shortcuts: {backup}")
 
     def writer(fp):
-        vdf.binary_dump(data, fp)
+        _require_vdf().binary_dump(data, fp)
 
     atomic_write(shortcuts_file, writer)
-    print(f"Updated Steam shortcut: {APP_NAME} (shortcut app ID {shortcut_id})")
-    print(f"Game steam_appid.txt value selected: {game_app_id}")
+    _print(f"Updated Steam shortcut: {APP_NAME} (shortcut app ID {shortcut_id})")
+    _print(f"Game steam_appid.txt value selected: {game_app_id}")
     return shortcut_id
 
 
 def load_text_vdf(path: Path) -> dict[str, Any]:
+    vdf_module = _require_vdf()
     if not path.exists():
         return {}
     with path.open("r", encoding="utf-8-sig", errors="strict") as fp:
-        data = vdf.load(fp)
+        data = vdf_module.load(fp)
     if not isinstance(data, dict):
         raise RuntimeError(f"Unexpected VDF structure in {path}")
     return data
@@ -345,15 +436,15 @@ def set_proton_mapping(config_file: Path, shortcut_id: int) -> None:
 
     backup = backup_file(config_file)
     if backup:
-        print(f"Backed up Steam config: {backup}")
+        _print(f"Backed up Steam config: {backup}")
 
     def writer(fp):
         # Steam's config.vdf is text VDF, unlike binary shortcuts.vdf.
-        text = vdf.dumps(data, pretty=True)
+        text = _require_vdf().dumps(data, pretty=True)
         fp.write(text.encode("utf-8"))
 
     atomic_write(config_file, writer)
-    print(f"Set compatibility tool for shortcut {shortcut_id}: Proton Experimental")
+    _print(f"Set compatibility tool for shortcut {shortcut_id}: Proton Experimental")
 
 
 def write_game_appid(exe_path: Path, game_app_id: str) -> None:
@@ -361,17 +452,126 @@ def write_game_appid(exe_path: Path, game_app_id: str) -> None:
     if appid_file.exists():
         current = appid_file.read_text(encoding="ascii", errors="replace").strip()
         if current == game_app_id:
-            print(f"steam_appid.txt already contains {game_app_id}")
+            _print(f"steam_appid.txt already contains {game_app_id}")
             return
         backup = backup_file(appid_file)
         if backup:
-            print(f"Backed up existing app ID file: {backup}")
+            _print(f"Backed up existing app ID file: {backup}")
     else:
-        print(f"Creating {appid_file}")
+        _print(f"Creating {appid_file}")
 
     payload = f"{game_app_id}\n".encode("ascii")
     atomic_write(appid_file, lambda fp: fp.write(payload))
-    print(f"Wrote {appid_file}: {game_app_id}")
+    _print(f"Wrote {appid_file}: {game_app_id}")
+
+
+def _automatic_steam_root() -> Path:
+    roots = steam_roots()
+    if not roots:
+        raise RuntimeError(
+            "Could not find a Steam installation. Start Steam once and try again."
+        )
+    return roots[0]
+
+
+def _automatic_user_dir(
+    steam_root: Path,
+    on_choose_user: Callable[[list[Path]], Path | None] | None = None,
+) -> Path:
+    userdata = steam_root / "userdata"
+    users = sorted(
+        (path for path in userdata.iterdir() if path.is_dir() and path.name.isdigit()),
+        key=lambda path: path.name,
+    ) if userdata.is_dir() else []
+    if not users:
+        raise RuntimeError(f"No numeric Steam user directories found in {userdata}")
+    if len(users) == 1:
+        return users[0]
+
+    selected = (
+        on_choose_user(users)
+        if on_choose_user is not None
+        else choose_user_dir(steam_root, requested=None)
+    )
+    if selected is None:
+        raise InstallationPaused
+    selected = selected.expanduser().resolve()
+    if selected not in users:
+        raise ValueError("The selected Steam user directory is not valid.")
+    return selected
+
+
+def steam_game_id(shortcut_appid: int) -> int:
+    """Encode a shortcut app ID as the 64-bit GameID expected by Steam URLs."""
+    return (shortcut_appid << 32) | 0x02000000
+
+
+def configure_steam_shortcut(
+    exe_path: Path,
+    game_app_id: str,
+    launch_options: str = LAUNCH_OPTIONS,
+    on_steam_prompt: Callable[[], bool] | None = None,
+    on_choose_user: Callable[[list[Path]], Path | None] | None = None,
+) -> tuple[int, Path]:
+    """Write the BLRevive shortcut and return its generated ID and Steam root."""
+    if game_app_id not in {"480", "209870"}:
+        raise ValueError("Choose a valid Steam ownership option.")
+    exe_path = exe_path.expanduser().resolve()
+    if not exe_path.is_file():
+        raise RuntimeError(f"The game executable was not found: {exe_path}")
+    if exe_path.suffix.lower() != ".exe":
+        raise RuntimeError(f"Expected a Windows .exe for Proton, got: {exe_path}")
+    ensure_steam_closed(on_steam_prompt)
+
+    root = _automatic_steam_root()
+    user_dir = _automatic_user_dir(root, on_choose_user)
+    config_file = root / "config" / "config.vdf"
+    if not config_file.is_file():
+        raise RuntimeError(
+            f"Steam config file not found: {config_file}. Start Steam once and retry."
+        )
+    shortcut_id = write_shortcut(
+        user_dir / "config" / "shortcuts.vdf",
+        exe_path,
+        game_app_id,
+        launch_options,
+    )
+    if sys.platform.startswith("linux"):
+        set_proton_mapping(config_file, shortcut_id)
+    write_game_appid(exe_path, game_app_id)
+    return shortcut_id, root
+
+
+def launch_steam(steam_root: Path, shortcut_id: int | None = None) -> None:
+    """Launch Steam, optionally opening the BLRevive shortcut directly."""
+    uri_args = (
+        [f"steam://rungameid/{shortcut_id}"] if shortcut_id is not None else []
+    )
+    if sys.platform == "win32":
+        steam_exe = steam_root / "steam.exe"
+        if not steam_exe.is_file():
+            raise RuntimeError(f"Steam executable not found: {steam_exe}")
+        subprocess.Popen([str(steam_exe), *uri_args], cwd=steam_root)
+    elif "com.valvesoftware.Steam" in str(steam_root):
+        flatpak = shutil.which("flatpak")
+        if flatpak is None:
+            raise RuntimeError("Flatpak is required to launch this Steam installation.")
+        subprocess.Popen([flatpak, "run", "com.valvesoftware.Steam", *uri_args])
+    else:
+        steam = steam_root / "steam"
+        if not steam.is_file():
+            located_steam = shutil.which("steam")
+            if located_steam is None:
+                raise RuntimeError(f"Steam launcher not found in {steam_root}")
+            steam = Path(located_steam)
+        subprocess.Popen([str(steam), *uri_args], cwd=steam_root)
+
+
+def launch_steam_shortcut(exe_path: Path) -> None:
+    """Open the Steam library shortcut associated with this executable."""
+    exe_value = quoted_path(exe_path.expanduser().resolve())
+    shortcut_id = generated_shortcut_appid(exe_value, APP_NAME)
+    launch_steam(_automatic_steam_root(), steam_game_id(shortcut_id))
 
 
 def main() -> int:
@@ -428,7 +628,8 @@ def main() -> int:
     shortcut_id = write_shortcut(
         shortcuts_file, exe_path, args.game_app_id, args.launch_options
     )
-    set_proton_mapping(config_file, shortcut_id)
+    if sys.platform.startswith("linux"):
+        set_proton_mapping(config_file, shortcut_id)
     write_game_appid(exe_path, args.game_app_id)
 
     print("\nSetup written. Start Steam and check the BLRevive library entry.")

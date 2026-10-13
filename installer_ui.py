@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import subprocess
-import sys
 import zipfile
 from pathlib import Path
 from typing import Callable
 
-from installer_config import GAME_EXECUTABLE, STEAM_OPTIONS, TEXT_FILE, load_launch_args
+from blrevive_steam_setup import launch_steam_shortcut
+from installer_config import GAME_EXECUTABLE, STEAM_OPTIONS, TEXT_FILE
 from installer_download import format_size, metadata_path, read_resume_metadata
 from installer_state import extraction_progress_for_destination, last_destination
 
@@ -134,15 +133,15 @@ def launch_game(
     destination: Path,
     steam_app_id: str,
     on_message: Callable[[str], None] | None = None,
-) -> None:
+) -> bool:
     executable = destination / GAME_EXECUTABLE
     if not executable.is_file():
         message = (
             f"The game executable was not found: {executable}. "
-            "You can reinstall or launch it manually."
+            "You can reinstall the game."
         )
         (on_message or print)(message)
-        return
+        return False
 
     valid_app_ids = {app_id for _, app_id in STEAM_OPTIONS.values()}
     if steam_app_id not in valid_app_ids:
@@ -152,10 +151,6 @@ def launch_game(
     steam_app_id_file.parent.mkdir(parents=True, exist_ok=True)
     steam_app_id_file.write_text(steam_app_id, encoding="utf-8")
 
-    launch_args = load_launch_args()
-
-    if sys.platform == "win32":
-        subprocess.Popen([str(executable), *launch_args], cwd=executable.parent)
-    else:
-        subprocess.Popen(["wine", str(executable), *launch_args], cwd=executable.parent)
-    (on_message or print)(f"Launching {executable.name}...")
+    launch_steam_shortcut(executable)
+    (on_message or print)("Launching BLRevive through Steam...")
+    return True

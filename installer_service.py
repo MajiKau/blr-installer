@@ -6,7 +6,17 @@ import zipfile
 from pathlib import Path
 from typing import Callable
 
-from installer_config import STEAM_OPTIONS, TEXT_FILE, load_zip_url
+from blrevive_steam_setup import (
+    configure_steam_shortcut,
+    launch_steam,
+)
+from installer_config import (
+    GAME_EXECUTABLE,
+    STEAM_OPTIONS,
+    TEXT_FILE,
+    load_launch_args,
+    load_zip_url,
+)
 from installer_download import download_zip
 from installer_extract import safe_extract
 from installer_progress import finish_progress, show_progress
@@ -27,6 +37,8 @@ def run_install(
     state: dict[str, object],
     on_progress: Callable[[str, int, int | None], None] | None = None,
     pause_event: threading.Event | None = None,
+    on_steam_prompt: Callable[[], bool] | None = None,
+    on_choose_steam_user: Callable[[list[Path]], Path | None] | None = None,
 ) -> None:
     destination = Path(str(state["destination"])).expanduser().resolve()
     steam_app_id = str(state["steam_app_id"])
@@ -64,11 +76,22 @@ def run_install(
     text_file.parent.mkdir(parents=True, exist_ok=True)
     text_file.write_text(steam_app_id, encoding="utf-8")
 
+    if on_progress is not None:
+        on_progress("Steam setup", 0, None)
+    _, steam_root = configure_steam_shortcut(
+        destination / GAME_EXECUTABLE,
+        steam_app_id,
+        " ".join(load_launch_args()),
+        on_steam_prompt,
+        on_choose_steam_user,
+    )
+
     state["phase"] = "complete"
     state["completed_members"] = []
     state["current_member_index"] = None
     state["current_member_bytes"] = 0
     atomic_write_json(state_path, state)
+    launch_steam(steam_root)
     if on_progress is None:
         print(f"Installation complete. Created {text_file}")
 
@@ -78,6 +101,8 @@ def install_configured(
     steam_app_id: str,
     on_progress: Callable[[str, int, int | None], None],
     pause_event: threading.Event,
+    on_steam_prompt: Callable[[], bool] | None = None,
+    on_choose_steam_user: Callable[[list[Path]], Path | None] | None = None,
 ) -> None:
     if steam_app_id not in {value for _, value in STEAM_OPTIONS.values()}:
         raise ValueError("Choose a valid Steam ownership option.")
@@ -119,4 +144,6 @@ def install_configured(
         state,
         on_progress,
         pause_event,
+        on_steam_prompt,
+        on_choose_steam_user,
     )

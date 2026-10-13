@@ -7,9 +7,10 @@ import unittest
 import zipfile
 from email.message import Message
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.request import Request
 
+import blrevive_steam_setup
 import installer
 import installer_download
 import installer_errors
@@ -17,7 +18,7 @@ import installer_extract
 import installer_service
 import installer_state
 import installer_ui
-from installer_config import DEFAULT_LAUNCH_ARGS, GAME_EXECUTABLE, TEXT_FILE
+from installer_config import GAME_EXECUTABLE, TEXT_FILE
 from installer_extract import safe_extract
 
 
@@ -122,11 +123,22 @@ class SafeExtractTests(unittest.TestCase):
                     patch.object(installer, "choose_steam_option", return_value=app_id),
                     patch.object(installer, "choose_destination", return_value=destination),
                     patch.object(installer_service, "download_zip", side_effect=create_test_zip),
+                    patch.object(
+                        installer_service,
+                        "configure_steam_shortcut",
+                        return_value=(1234, root / "Steam"),
+                    ) as configure_shortcut,
+                    patch.object(installer_service, "launch_steam") as launch_steam,
                     patch.object(installer, "_prompt_keep_download", return_value=True),
                     patch.object(installer, "_prompt_for_completed_action", return_value="4"),
                 ):
                     installer.install()
 
+                self.assertEqual(
+                    configure_shortcut.call_args.args[:2],
+                    (destination / GAME_EXECUTABLE, app_id),
+                )
+                launch_steam.assert_called_once_with(root / "Steam")
                 self.assertEqual((destination / TEXT_FILE).read_text(encoding="utf-8"), app_id)
                 url_hash = hashlib.sha256(
                     "https://example.test/game.zip".encode("utf-8")
@@ -174,44 +186,35 @@ class SafeExtractTests(unittest.TestCase):
             launch_game.assert_called_once_with(destination.resolve(), "480")
             self.assertEqual(json.loads(state_path.read_text(encoding="utf-8"))["phase"], "complete")
 
-    def test_launch_game_uses_configured_executable_and_arguments(self) -> None:
+    def test_launch_game_uses_the_steam_shortcut_on_windows(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             destination = Path(temp_dir) / "install"
             executable = destination / GAME_EXECUTABLE
             executable.parent.mkdir(parents=True)
             executable.write_bytes(b"placeholder")
 
-            with (
-                patch.object(installer_ui.sys, "platform", "win32"),
-                patch.object(installer_ui.subprocess, "Popen") as popen,
-            ):
+            with patch.object(installer_ui, "launch_steam_shortcut") as launch_steam:
                 messages: list[str] = []
-                installer_ui.launch_game(destination, "209870", on_message=messages.append)
+                launched = installer_ui.launch_game(
+                    destination, "209870", on_message=messages.append
+                )
 
-            popen.assert_called_once_with(
-                [str(executable), *DEFAULT_LAUNCH_ARGS],
-                cwd=executable.parent,
-            )
+            launch_steam.assert_called_once_with(executable)
+            self.assertTrue(launched)
             self.assertEqual((destination / TEXT_FILE).read_text(encoding="utf-8"), "209870")
-            self.assertEqual(messages, ["Launching FoxGame-win32-Shipping.exe..."])
+            self.assertEqual(messages, ["Launching BLRevive through Steam..."])
 
-    def test_launch_game_uses_wine_on_linux(self) -> None:
+    def test_launch_game_uses_the_steam_shortcut_on_linux(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             destination = Path(temp_dir) / "install"
             executable = destination / GAME_EXECUTABLE
             executable.parent.mkdir(parents=True)
             executable.write_bytes(b"placeholder")
 
-            with (
-                patch.object(installer_ui.sys, "platform", "linux"),
-                patch.object(installer_ui.subprocess, "Popen") as popen,
-            ):
+            with patch.object(installer_ui, "launch_steam_shortcut") as launch_steam:
                 installer_ui.launch_game(destination, "480")
 
-            popen.assert_called_once_with(
-                ["wine", str(executable), *DEFAULT_LAUNCH_ARGS],
-                cwd=executable.parent,
-            )
+            launch_steam.assert_called_once_with(executable)
             self.assertEqual((destination / TEXT_FILE).read_text(encoding="utf-8"), "480")
 
     def test_launch_game_ignores_other_executables(self) -> None:
@@ -222,10 +225,10 @@ class SafeExtractTests(unittest.TestCase):
             (game_directory / "SomeOther.exe").write_bytes(b"placeholder")
             messages: list[str] = []
 
-            with patch.object(installer_ui.subprocess, "Popen") as popen:
+            with patch.object(installer_ui, "launch_steam_shortcut") as launch_steam:
                 installer_ui.launch_game(destination, "480", on_message=messages.append)
 
-            popen.assert_not_called()
+            launch_steam.assert_not_called()
             self.assertEqual(len(messages), 1)
             self.assertIn(GAME_EXECUTABLE.name, messages[0])
             self.assertFalse((destination / TEXT_FILE).exists())
@@ -238,12 +241,130 @@ class SafeExtractTests(unittest.TestCase):
             executable.write_bytes(b"placeholder")
 
             with (
-                patch.object(installer_ui.subprocess, "Popen") as popen,
+                patch.object(installer_ui, "launch_steam_shortcut") as launch_steam,
                 self.assertRaisesRegex(ValueError, "valid Steam ownership"),
             ):
                 installer_ui.launch_game(destination, "12345")
 
-            popen.assert_not_called()
+            launch_steam.assert_not_called()
+
+    def test_steam_setup_adds_shortcut_and_forces_proton_on_linux(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "Steam"
+            user_dir = root / "userdata" / "12345"
+            other_user_dir = root / "userdata" / "67890"
+            config_dir = root / "config"
+            (user_dir / "config").mkdir(parents=True)
+            (other_user_dir / "config").mkdir(parents=True)
+            config_dir.mkdir(parents=True)
+            executable = Path(temp_dir) / "install" / GAME_EXECUTABLE
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"game")
+            config_file = config_dir / "config.vdf"
+            config_file.write_text(
+                blrevive_steam_setup.vdf.dumps(
+                    {
+                        "InstallConfigStore": {
+                            "Software": {
+                                "Valve": {
+                                    "Steam": {
+                                        "CompatToolMapping": {
+                                            "123": {
+                                                "name": "existing-tool",
+                                                "config": "",
+                                                "priority": "1",
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(blrevive_steam_setup, "steam_appears_running", return_value=False),
+                patch.object(blrevive_steam_setup, "steam_roots", return_value=[root]),
+                patch.object(blrevive_steam_setup.sys, "platform", "linux"),
+            ):
+                choose_user = Mock(return_value=other_user_dir)
+                shortcut_id, selected_root = blrevive_steam_setup.configure_steam_shortcut(
+                    executable,
+                    "480",
+                    "-presenceport=9004",
+                    on_choose_user=choose_user,
+                )
+
+            shortcuts = blrevive_steam_setup.read_binary_shortcuts(
+                other_user_dir / "config" / "shortcuts.vdf"
+            )["shortcuts"]
+            shortcut = next(iter(shortcuts.values()))
+            self.assertEqual(selected_root, root)
+            self.assertEqual(shortcut["AppName"], "BLRevive")
+            self.assertEqual(shortcut["LaunchOptions"], "-presenceport=9004")
+            choose_user.assert_called_once_with([user_dir, other_user_dir])
+            self.assertEqual(
+                shortcut["appid"],
+                blrevive_steam_setup.signed_shortcut_appid(shortcut_id),
+            )
+            proton_mapping = blrevive_steam_setup.load_text_vdf(config_file)[
+                "InstallConfigStore"
+            ]["Software"]["Valve"]["Steam"]["CompatToolMapping"]
+            self.assertEqual(proton_mapping["123"]["name"], "existing-tool")
+            self.assertEqual(proton_mapping[str(shortcut_id)]["name"], "proton_experimental")
+            self.assertEqual(
+                (executable.parent / "steam_appid.txt").read_text(encoding="ascii").strip(),
+                "480",
+            )
+
+    def test_launch_steam_shortcut_uses_generated_library_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "Steam"
+            root.mkdir()
+            (root / "steam.exe").write_bytes(b"steam")
+            executable = Path(temp_dir) / "FoxGame.exe"
+            expected_id = blrevive_steam_setup.generated_shortcut_appid(
+                blrevive_steam_setup.quoted_path(executable.resolve()),
+                blrevive_steam_setup.APP_NAME,
+            )
+
+            with (
+                patch.object(blrevive_steam_setup.sys, "platform", "win32"),
+                patch.object(
+                    blrevive_steam_setup, "_automatic_steam_root", return_value=root
+                ),
+                patch.object(blrevive_steam_setup.subprocess, "Popen") as popen,
+            ):
+                blrevive_steam_setup.launch_steam_shortcut(executable)
+
+            popen.assert_called_once_with(
+                [
+                    str(root / "steam.exe"),
+                    f"steam://rungameid/{blrevive_steam_setup.steam_game_id(expected_id)}",
+                ],
+                cwd=root,
+            )
+
+    def test_steam_close_check_prompts_only_when_steam_is_running(self) -> None:
+        with patch.object(
+            blrevive_steam_setup, "steam_appears_running", side_effect=(False, True, False)
+        ) as running_check:
+            prompt = Mock(return_value=True)
+
+            blrevive_steam_setup.ensure_steam_closed()
+            blrevive_steam_setup.ensure_steam_closed(prompt)
+
+        prompt.assert_called_once_with()
+        self.assertEqual(running_check.call_count, 3)
+
+    def test_steam_close_prompt_can_pause_install(self) -> None:
+        with (
+            patch.object(blrevive_steam_setup, "steam_appears_running", return_value=True),
+            self.assertRaises(installer_errors.InstallationPaused),
+        ):
+            blrevive_steam_setup.ensure_steam_closed(lambda: False)
 
     def test_prompt_keep_download_accepts_yes_and_defaults_to_no(self) -> None:
         with patch("builtins.input", side_effect=("invalid", "yes")):
@@ -631,6 +752,12 @@ class SafeExtractTests(unittest.TestCase):
                     "download_zip",
                     side_effect=AssertionError("should reuse ZIP"),
                 ),
+                patch.object(
+                    installer_service,
+                    "configure_steam_shortcut",
+                    return_value=(1234, root / "Steam"),
+                ),
+                patch.object(installer_service, "launch_steam"),
                 patch.object(installer, "_prompt_keep_download", return_value=False),
                 patch.object(installer, "_prompt_for_completed_action", return_value="4"),
             ):

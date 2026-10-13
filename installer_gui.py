@@ -6,7 +6,7 @@ import threading
 import tkinter as tk
 import zipfile
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 
 import ttkbootstrap as ttk
 
@@ -122,18 +122,10 @@ class InstallerWindow:
             bootstyle="success",
         )
         self.launch_button.pack(side="left", padx=(0, 8))
-        self.pause_button = ttk.Button(
-            actions,
-            text="Pause",
-            command=self._pause,
-            state="disabled",
-            bootstyle="warning",
-        )
-        self.pause_button.pack(side="left", padx=(0, 8))
         self.start_button = ttk.Button(
             actions,
             text="Install",
-            command=self._start_install,
+            command=self._install_action,
             bootstyle="danger",
         )
         self.start_button.pack(side="left")
@@ -220,9 +212,9 @@ class InstallerWindow:
         destination = Path(destination_text).expanduser()
         steam_app_id = self.steam_app_id_var.get()
         self.pause_event.clear()
-        self.start_button.state(["disabled"])
+        self.start_button.configure(text="Pause")
+        self.start_button.state(["!disabled"])
         self.launch_button.state(["disabled"])
-        self.pause_button.state(["!disabled"])
         self.browse_button.state(["disabled"])
         self.destination_entry.state(["disabled"])
         self.status_var.set("Preparing installation...")
@@ -231,6 +223,20 @@ class InstallerWindow:
         def report_progress(stage: str, current: int, total: int | None) -> None:
             self.events.put(("progress", (stage, current, total)))
 
+        def prompt_to_close_steam() -> bool:
+            response = threading.Event()
+            answer: list[bool] = []
+            self.events.put(("steam_prompt", (response, answer)))
+            response.wait()
+            return answer[0]
+
+        def choose_steam_user(users: list[Path]) -> Path | None:
+            response = threading.Event()
+            answer: list[Path | None] = []
+            self.events.put(("steam_user_prompt", (users, response, answer)))
+            response.wait()
+            return answer[0]
+
         def worker() -> None:
             try:
                 install_configured(
@@ -238,6 +244,8 @@ class InstallerWindow:
                     steam_app_id,
                     report_progress,
                     self.pause_event,
+                    prompt_to_close_steam,
+                    choose_steam_user,
                 )
             except InstallationPaused:
                 self.events.put(("paused", None))
@@ -252,9 +260,15 @@ class InstallerWindow:
         self.worker.start()
         self.root.after(100, self._poll_events)
 
+    def _install_action(self) -> None:
+        if self.worker is not None and self.worker.is_alive():
+            self._pause()
+        else:
+            self._start_install()
+
     def _pause(self) -> None:
         self.pause_event.set()
-        self.pause_button.state(["disabled"])
+        self.start_button.state(["disabled"])
         self.status_var.set("Pausing after the current download/extraction chunk...")
 
     def _poll_events(self) -> None:
@@ -280,6 +294,37 @@ class InstallerWindow:
                         f"{stage}: {min(current / total, 1):.0%} "
                         f"({format_size(current)} of {format_size(total)})"
                     )
+            elif event == "steam_prompt":
+                response, answer = payload  # type: ignore[misc]
+                self.start_button.state(["disabled"])
+                answer.append(
+                    messagebox.askokcancel(
+                        "Close Steam",
+                        "The download and extraction are complete. Steam must be fully "
+                        "closed now so the installer can add the library shortcut. "
+                        "Exit Steam, including its tray process, then choose OK. "
+                        "Choose Cancel to pause the installation.",
+                        parent=self.root,
+                    )
+                )
+                response.set()
+            elif event == "steam_user_prompt":
+                users, response, answer = payload  # type: ignore[misc]
+                choices = "\n".join(
+                    f"{index}. Steam user {user.name}"
+                    for index, user in enumerate(users, start=1)
+                )
+                self.start_button.state(["disabled"])
+                selection = simpledialog.askinteger(
+                    "Select Steam user",
+                    "Choose the Steam account whose library should receive the "
+                    f"BLRevive shortcut:\n\n{choices}\n\nEnter a number:",
+                    minvalue=1,
+                    maxvalue=len(users),
+                    parent=self.root,
+                )
+                answer.append(users[selection - 1] if selection is not None else None)
+                response.set()
             elif event == "paused":
                 self.progress.stop()
                 self.status_var.set("Paused. Progress is saved; press Continue to resume.")
@@ -317,11 +362,24 @@ class InstallerWindow:
                     )
             elif event == "error":
                 self.progress.stop()
-                self.status_var.set("Installation failed.")
+                try:
+                    self.state = read_job_state(self.state_path, self.url)
+                except ValueError:
+                    self.state = None
+                if self.state is not None and self.state.get("phase") == "complete":
+                    self.status_var.set(
+                        "Installation completed, but Steam could not be relaunched."
+                    )
+                    self.start_button.configure(text="Reinstall")
+                    self.launch_button.state(["!disabled"])
+                else:
+                    self.status_var.set("Installation failed.")
+                    self.start_button.configure(
+                        text="Continue installation" if self.state is not None else "Install"
+                    )
                 messagebox.showerror("Installation failed", str(payload), parent=self.root)
                 self.start_button.state(["!disabled"])
             elif event == "stopped":
-                self.pause_button.state(["disabled"])
                 self.start_button.state(["!disabled"])
                 self.browse_button.state(["!disabled"])
                 self.destination_entry.state(["!disabled"])
@@ -335,8 +393,9 @@ class InstallerWindow:
     def _launch_game(self) -> None:
         destination = Path(self.destination_var.get()).expanduser().resolve()
         try:
-            launch_game(destination, self.steam_app_id_var.get(), self.status_var.set)
-        except (OSError, ValueError) as exc:
+            if launch_game(destination, self.steam_app_id_var.get(), self.status_var.set):
+                self.root.destroy()
+        except (OSError, RuntimeError, ValueError) as exc:
             messagebox.showerror("Could not launch game", str(exc), parent=self.root)
 
     def _on_close(self) -> None:

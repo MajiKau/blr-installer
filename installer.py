@@ -138,6 +138,7 @@ def main() -> int:
         return 130
     except (
         OSError,
+        RuntimeError,
         ValueError,
         http.client.HTTPException,
         zipfile.BadZipFile,

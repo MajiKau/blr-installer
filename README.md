@@ -9,13 +9,15 @@ installation settings are saved in the user's application state directory
 (`%LOCALAPPDATA%\blr-installer` on Windows or
 `~/.local/state/blr-installer` on Linux, unless `XDG_STATE_HOME` is set).
 The installer remembers the last selected install folder.
-After an install finishes, it saves a completed status. It offers to launch the
-game, reinstall with the saved settings, change settings and reinstall, or exit.
-The same choices appear if you run the installer again later. Launch always
-starts `blacklightretribution/Binaries/Win32/FoxGame-win32-Shipping.exe` with
-the arguments in `config.json` and refreshes `steam_appid.txt` from the
-currently selected Steam ownership option before starting it. On Linux, Wine
-must be installed to launch this Windows executable.
+After an install finishes, it adds or updates the BLRevive non-Steam shortcut
+in the Steam library and relaunches Steam. On Linux it also selects Proton
+Experimental for the shortcut; Proton Experimental must already be installed
+in Steam. Steam can stay open during the download and extraction. If it is still
+running when shortcut setup begins, the installer asks you to close it because
+Steam can overwrite changes to its shortcut files. If Steam has multiple user
+directories, the installer prompts you to choose which library receives the
+shortcut. The Launch game button starts that Steam library shortcut and closes
+the installer.
 
 If an install is interrupted, the next run shows the saved progress and lets you
 continue, change the Steam choice or install folder, or cancel while keeping the
@@ -46,12 +48,12 @@ Edit `config.json` and set `zip_url` to the HTTPS or HTTP URL of the ZIP file:
 }
 ```
 
-`launch_args` is an array of arguments passed directly to the game. Omit it to
+`launch_args` is an array of arguments passed to the Steam shortcut. Omit it to
 use the defaults shown above, or set it to an empty array for no launch arguments.
 
 ## Run
 
-Python 3 and the GUI dependency must be installed:
+Python 3 and the project dependencies must be installed:
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -63,8 +65,9 @@ python -m pip install -r requirements.txt
 The GUI uses ttkbootstrap's built-in `pydata-dark` theme.
 
 The GUI allows choosing the Steam option and install folder, shows download and
-extraction progress, and can pause/resume an installation. Closing the GUI while
-an operation is active requests a pause and saves progress.
+extraction progress, and uses one action button to install, pause, or continue an
+installation. Closing the GUI while an operation is active requests a pause and
+saves progress.
 
 The terminal version prompts for whether you own the game on Steam and for an
 install folder (press Enter to use the remembered location, initially
