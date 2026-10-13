@@ -62,7 +62,7 @@ def last_destination() -> Path:
     try:
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return Path(__file__).resolve().parent / "installation"
+        return Path(sys.executable).resolve().parent / "installation"
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Could not read saved installer settings: {exc}") from exc
     value = settings.get("last_destination") if isinstance(settings, dict) else None

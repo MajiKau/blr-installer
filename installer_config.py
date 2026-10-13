@@ -19,7 +19,7 @@ DEFAULT_LAUNCH_ARGS = (
     "-presenceport=9004",
 )
 if getattr(sys, "frozen", False):
-    _bundle_directory = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    _bundle_directory = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
     _external_config = Path(sys.executable).resolve().parent / "config.json"
     CONFIG_FILE = _external_config if _external_config.is_file() else _bundle_directory / "config.json"
 else:
