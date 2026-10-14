@@ -53,6 +53,27 @@ class FakeResponse:
 
 
 class SafeExtractTests(unittest.TestCase):
+    def test_default_destination_uses_platform_install_location(self) -> None:
+        with (
+            patch.object(installer_state.sys, "platform", "win32"),
+            patch.dict(
+                installer_state.os.environ,
+                {"LOCALAPPDATA": r"C:\Users\test\AppData\Local"},
+                clear=True,
+            ),
+        ):
+            self.assertEqual(
+                installer_state.default_destination(),
+                Path(r"C:\Users\test\AppData\Local\BLRevive"),
+            )
+
+        with patch.object(installer_state.sys, "platform", "linux"):
+            with patch.object(Path, "home", return_value=Path("/home/test")):
+                self.assertEqual(
+                    installer_state.default_destination(),
+                    Path("/home/test/Games"),
+                )
+
     def test_extracts_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from logging import root
 import queue
 import threading
 import tkinter as tk
@@ -26,9 +27,9 @@ from installer_ui import launch_game
 class InstallerWindow:
     def __init__(self, root: ttk.App) -> None:
         self.root = root
-        self.root.title("Blacklight Retribution Installer")
+        self.root.title("Blacklight: Retribution Installer")
         self.root.minsize(520, 300)
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.pause_event = threading.Event()
         self.worker: threading.Thread | None = None
@@ -48,7 +49,9 @@ class InstallerWindow:
         self._build_widgets()
         if self.state is not None:
             self.destination_var.set(str(self.state["destination"]))
-            self.steam_app_id_var.set(str(self.state["steam_app_id"]))
+            self.owned_app_id_var.set(
+                str(self.state["steam_app_id"]) == STEAM_OPTIONS["1"][1]
+            )
             if self.state.get("phase") == "complete":
                 self.status_var.set("An installation is already complete.")
                 self.start_button.configure(text="Reinstall")
@@ -70,21 +73,40 @@ class InstallerWindow:
         frame = ttk.Frame(self.root, padding=20)
         frame.pack(fill="both", expand=True)
 
-        ttk.Label(frame, text="Steam ownership").grid(row=0, column=0, sticky="w")
-        self.steam_app_id_var = tk.StringVar(value="480")
-        for index, (label, app_id) in enumerate(STEAM_OPTIONS.values(), start=1):
-            ttk.Radiobutton(
-                frame,
-                text=label,
-                variable=self.steam_app_id_var,
-                value=app_id,
-            ).grid(row=index, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.keep_download_var = tk.BooleanVar(value=False)
+        self.keep_download_checkbox = ttk.Checkbutton(
+            frame,
+            text="Keep downloaded ZIP for faster reinstalls",
+            variable=self.keep_download_var,
+        )
+        self.keep_download_checkbox.grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="w",
+        )
+        ttk.Label(
+            frame,
+            text="Uses about 6GB of disk space.",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+        self.owned_app_id_var = tk.BooleanVar(value=False)
+        self.app_id_checkbox = ttk.Checkbutton(
+            frame,
+            text="Have Steam detect the game as Blacklight: Retribution instead of SpaceWar",
+            variable=self.owned_app_id_var,
+        )
+        self.app_id_checkbox.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0),)
+        ttk.Label(
+            frame,
+            text="Requires owning Blacklight: Retribution on Steam.",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         ttk.Label(frame, text="Install folder").grid(
-            row=3,
+            row=4,
             column=0,
             sticky="w",
-            pady=(18, 4),
+            pady=(10, 0),
         )
         self.destination_var = tk.StringVar()
         self.destination_entry = ttk.Entry(
@@ -92,28 +114,34 @@ class InstallerWindow:
             textvariable=self.destination_var,
             width=52,
         )
-        self.destination_entry.grid(row=4, column=0, sticky="ew")
+        self.destination_entry.grid(row=5, column=0, sticky="ew")
         self.browse_button = ttk.Button(
             frame,
             text="Browse...",
             command=self._browse_destination,
             bootstyle="primary",
         )
-        self.browse_button.grid(row=4, column=1, padx=(8, 0))
+        self.browse_button.grid(row=5, column=1, padx=(8, 0))
+
+        ttk.Label(
+            frame,
+            text="The ZIP's blacklightretribution folder will be placed inside this folder.",
+            wraplength=480,
+        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         self.status_var = tk.StringVar(value="Ready.")
         ttk.Label(frame, textvariable=self.status_var).grid(
-            row=5,
+            row=7,
             column=0,
             columnspan=2,
             sticky="w",
-            pady=(18, 4),
+            pady=(12, 4),
         )
         self.progress = ttk.Progressbar(frame, mode="determinate", maximum=100)
-        self.progress.grid(row=6, column=0, columnspan=2, sticky="ew")
+        self.progress.grid(row=8, column=0, columnspan=2, sticky="ew")
 
         actions = ttk.Frame(frame)
-        actions.grid(row=7, column=0, columnspan=2, sticky="e", pady=(20, 0))
+        actions.grid(row=9, column=0, columnspan=2, sticky="e", pady=(20, 0))
         self.launch_button = ttk.Button(
             actions,
             text="Launch game",
@@ -210,15 +238,21 @@ class InstallerWindow:
             messagebox.showerror("Install folder required", "Choose an install folder.", parent=self.root)
             return
         destination = Path(destination_text).expanduser()
-        steam_app_id = self.steam_app_id_var.get()
         self.pause_event.clear()
         self.start_button.configure(text="Pause")
         self.start_button.state(["!disabled"])
         self.launch_button.state(["disabled"])
         self.browse_button.state(["disabled"])
         self.destination_entry.state(["disabled"])
+        self.app_id_checkbox.state(["disabled"])
+        self.keep_download_checkbox.state(["disabled"])
         self.status_var.set("Preparing installation...")
         self.progress.configure(mode="determinate", value=0)
+        steam_app_id = (
+            STEAM_OPTIONS["1"][1]
+            if self.owned_app_id_var.get()
+            else STEAM_OPTIONS["2"][1]
+        )
 
         def report_progress(stage: str, current: int, total: int | None) -> None:
             self.events.put(("progress", (stage, current, total)))
@@ -335,22 +369,14 @@ class InstallerWindow:
                 self.progress.configure(mode="determinate", value=100)
                 self.start_button.configure(text="Reinstall")
                 self.launch_button.state(["!disabled"])
-                keep_download = messagebox.askyesno(
-                    "Keep downloaded ZIP?",
-                    "Keep the downloaded ZIP for faster reinstallation? "
-                    "It will use additional disk space.",
-                    parent=self.root,
-                )
                 try:
-                    if keep_download:
+                    if self.keep_download_var.get():
                         self.status_var.set(
                             "Installation complete. Downloaded ZIP kept for faster reinstallation."
                         )
                     else:
                         discard_download_cache(self.download_path)
-                        self.status_var.set(
-                            "Installation complete. Downloaded ZIP removed."
-                        )
+                        self.status_var.set("Installation complete. Downloaded ZIP removed.")
                 except OSError as exc:
                     self.status_var.set(
                         "Installation complete, but the downloaded ZIP could not be removed."
@@ -383,6 +409,8 @@ class InstallerWindow:
                 self.start_button.state(["!disabled"])
                 self.browse_button.state(["!disabled"])
                 self.destination_entry.state(["!disabled"])
+                self.app_id_checkbox.state(["!disabled"])
+                self.keep_download_checkbox.state(["!disabled"])
                 if self.close_when_stopped:
                     self.root.destroy()
                     return
@@ -393,7 +421,12 @@ class InstallerWindow:
     def _launch_game(self) -> None:
         destination = Path(self.destination_var.get()).expanduser().resolve()
         try:
-            if launch_game(destination, self.steam_app_id_var.get(), self.status_var.set):
+            steam_app_id = (
+                STEAM_OPTIONS["1"][1]
+                if self.owned_app_id_var.get()
+                else STEAM_OPTIONS["2"][1]
+            )
+            if launch_game(destination, steam_app_id, self.status_var.set):
                 self.root.destroy()
         except (OSError, RuntimeError, ValueError) as exc:
             messagebox.showerror("Could not launch game", str(exc), parent=self.root)

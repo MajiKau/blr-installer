@@ -14,7 +14,19 @@ def state_directory() -> Path:
         root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
     else:
         root = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-    return root / "blr-installer"
+    return root / "BLRevive" / "installer"
+
+
+def default_destination() -> Path:
+    if sys.platform == "win32":
+        local_app_data_value = os.environ.get("LOCALAPPDATA")
+        local_app_data = (
+            Path(local_app_data_value)
+            if local_app_data_value
+            else Path.home() / "AppData" / "Local"
+        )
+        return local_app_data / "BLRevive"
+    return Path.home() / "Games"
 
 
 def atomic_write_json(path: Path, data: dict[str, object]) -> None:
@@ -62,7 +74,7 @@ def last_destination() -> Path:
     try:
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return Path(sys.executable).resolve().parent / "installation"
+        return default_destination()
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Could not read saved installer settings: {exc}") from exc
     value = settings.get("last_destination") if isinstance(settings, dict) else None

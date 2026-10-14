@@ -6,9 +6,12 @@ folder, and writes the selected Steam app ID to
 
 The terminal displays progress for downloading and extracting. Progress and
 installation settings are saved in the user's application state directory
-(`%LOCALAPPDATA%\blr-installer` on Windows or
-`~/.local/state/blr-installer` on Linux, unless `XDG_STATE_HOME` is set).
-The installer remembers the last selected install folder.
+(`%LOCALAPPDATA%\BLRevive\installer` on Windows or
+`~/.local/state/BLRevive/installer` on Linux, unless `XDG_STATE_HOME` is set).
+The installer remembers the last selected install folder. The initial folder is
+`%LOCALAPPDATA%\BLRevive` on Windows and `~/Games` on Linux. The ZIP contains a
+`blacklightretribution` folder, so that folder appears inside the selected
+location.
 After an install finishes, it adds or updates the BLRevive non-Steam shortcut
 in the Steam library and relaunches Steam. On Linux it also selects Proton
 Experimental for the shortcut; Proton Experimental must already be installed
@@ -28,9 +31,9 @@ so extraction can resume without re-extracting completed data. Changing the
 install folder resets extraction progress for that folder while retaining the
 downloaded ZIP for resuming that install. Progress is shown as a percentage when the total size is known,
 or as transferred bytes otherwise.
-After installation, the installer asks whether to keep the downloaded ZIP for
-faster reinstalls. If kept, a later reinstall reuses the cached archive; if
-removed, the installer downloads it again.
+The GUI's “Keep downloaded ZIP for faster reinstalls” checkbox is off by
+default. If enabled, a later reinstall reuses the cached archive; otherwise,
+the downloaded ZIP is removed after installation.
 
 ## Configure
 
@@ -64,15 +67,17 @@ python -m pip install -r requirements.txt
 
 The GUI uses ttkbootstrap's built-in `pydata-dark` theme.
 
-The GUI allows choosing the Steam option and install folder, shows download and
-extraction progress, and uses one action button to install, pause, or continue an
-installation. Closing the GUI while an operation is active requests a pause and
-saves progress.
+The GUI has checkboxes for keeping the downloaded ZIP and using App ID 209870
+ (which requires owning the game on Steam); unchecked, it
+uses App ID 480. It also allows choosing the install folder, shows download and
+extraction progress, and uses one action button to install, pause, or continue
+an installation. Closing the GUI while an operation is active requests a pause
+and saves progress.
 
-The terminal version prompts for whether you own the game on Steam and for an
-install folder (press Enter to use the remembered location, initially
-`installation` next to the installer). The generated text file contains `209870`
-for “Own on Steam” or `480` for “Don't own on Steam”.
+The terminal version prompts for whether you own the game on Steam, whether to
+keep the downloaded ZIP, and for an install folder (press Enter to use the
+remembered location or the platform default above). The generated text file
+contains `209870` for “Own on Steam” or `480` for “Don't own on Steam”.
 
 Do not remove the installer's saved state directory if you want to resume an
 interrupted installation. It stores a hash of the ZIP URL and the server's
@@ -94,7 +99,7 @@ machine; end users do not need to install Python.
    (use `python3` on Linux). The build scripts use `.venv` automatically when
    present.
 2. Run `.\build.ps1` on Windows or `sh build.sh` on Linux.
-3. Find the executable in `dist/` (`BLRInstaller.exe` on Windows).
+3. Find the executable in `dist/` (`BLReviveInstallerV1.exe` on Windows).
 
 The ZIP URL and game launch arguments from `config.json` are bundled into the
 executable. An optional `config.json` placed beside it overrides the bundled
