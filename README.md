@@ -16,8 +16,8 @@ in Steam. Steam can stay open during the download and extraction. If it is still
 running when shortcut setup begins, the installer asks you to close it because
 Steam can overwrite changes to its shortcut files. If Steam has multiple user
 directories, the installer prompts you to choose which library receives the
-shortcut. The Launch game button starts that Steam library shortcut and closes
-the installer.
+shortcut, using each account's display name and username where available. The
+Launch game button starts that Steam library shortcut and closes the installer.
 
 If an install is interrupted, the next run shows the saved progress and lets you
 continue, change the Steam choice or install folder, or cancel while keeping the

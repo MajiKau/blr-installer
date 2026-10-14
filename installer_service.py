@@ -38,7 +38,7 @@ def run_install(
     on_progress: Callable[[str, int, int | None], None] | None = None,
     pause_event: threading.Event | None = None,
     on_steam_prompt: Callable[[], bool] | None = None,
-    on_choose_steam_user: Callable[[list[Path]], Path | None] | None = None,
+    on_choose_steam_user: Callable[[list[tuple[Path, str]]], Path | None] | None = None,
 ) -> None:
     destination = Path(str(state["destination"])).expanduser().resolve()
     steam_app_id = str(state["steam_app_id"])
@@ -102,7 +102,7 @@ def install_configured(
     on_progress: Callable[[str, int, int | None], None],
     pause_event: threading.Event,
     on_steam_prompt: Callable[[], bool] | None = None,
-    on_choose_steam_user: Callable[[list[Path]], Path | None] | None = None,
+    on_choose_steam_user: Callable[[list[tuple[Path, str]]], Path | None] | None = None,
 ) -> None:
     if steam_app_id not in {value for _, value in STEAM_OPTIONS.values()}:
         raise ValueError("Choose a valid Steam ownership option.")

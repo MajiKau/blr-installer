@@ -230,7 +230,7 @@ class InstallerWindow:
             response.wait()
             return answer[0]
 
-        def choose_steam_user(users: list[Path]) -> Path | None:
+        def choose_steam_user(users: list[tuple[Path, str]]) -> Path | None:
             response = threading.Event()
             answer: list[Path | None] = []
             self.events.put(("steam_user_prompt", (users, response, answer)))
@@ -311,8 +311,8 @@ class InstallerWindow:
             elif event == "steam_user_prompt":
                 users, response, answer = payload  # type: ignore[misc]
                 choices = "\n".join(
-                    f"{index}. Steam user {user.name}"
-                    for index, user in enumerate(users, start=1)
+                    f"{index}. {label}"
+                    for index, (_, label) in enumerate(users, start=1)
                 )
                 self.start_button.state(["disabled"])
                 selection = simpledialog.askinteger(
@@ -323,7 +323,7 @@ class InstallerWindow:
                     maxvalue=len(users),
                     parent=self.root,
                 )
-                answer.append(users[selection - 1] if selection is not None else None)
+                answer.append(users[selection - 1][0] if selection is not None else None)
                 response.set()
             elif event == "paused":
                 self.progress.stop()

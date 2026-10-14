@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+from contextlib import redirect_stdout
 import tempfile
 import threading
 import unittest
@@ -283,6 +284,23 @@ class SafeExtractTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (config_dir / "loginusers.vdf").write_text(
+                blrevive_steam_setup.vdf.dumps(
+                    {
+                        "users": {
+                            str(blrevive_steam_setup.STEAM_ID64_BASE + 12345): {
+                                "AccountName": "cow",
+                                "PersonaName": "Cow Player",
+                            },
+                            str(blrevive_steam_setup.STEAM_ID64_BASE + 67890): {
+                                "AccountName": "guest",
+                                "PersonaName": "Guest Player",
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             with (
                 patch.object(blrevive_steam_setup, "steam_appears_running", return_value=False),
@@ -304,7 +322,12 @@ class SafeExtractTests(unittest.TestCase):
             self.assertEqual(selected_root, root)
             self.assertEqual(shortcut["AppName"], "BLRevive")
             self.assertEqual(shortcut["LaunchOptions"], "-presenceport=9004")
-            choose_user.assert_called_once_with([user_dir, other_user_dir])
+            choose_user.assert_called_once_with(
+                [
+                    (user_dir, "Cow Player (@cow)"),
+                    (other_user_dir, "Guest Player (@guest)"),
+                ]
+            )
             self.assertEqual(
                 shortcut["appid"],
                 blrevive_steam_setup.signed_shortcut_appid(shortcut_id),
@@ -365,6 +388,45 @@ class SafeExtractTests(unittest.TestCase):
             self.assertRaises(installer_errors.InstallationPaused),
         ):
             blrevive_steam_setup.ensure_steam_closed(lambda: False)
+
+    def test_steam_user_prompt_displays_account_names(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "Steam"
+            userdata = root / "userdata"
+            (userdata / "0").mkdir(parents=True)
+            (userdata / "12345").mkdir(parents=True)
+            (userdata / "67890").mkdir()
+            config = root / "config"
+            config.mkdir()
+            (config / "loginusers.vdf").write_text(
+                blrevive_steam_setup.vdf.dumps(
+                    {
+                        "users": {
+                            str(blrevive_steam_setup.STEAM_ID64_BASE + 12345): {
+                                "AccountName": "cow",
+                                "PersonaName": "Cow Player",
+                            },
+                            str(blrevive_steam_setup.STEAM_ID64_BASE + 67890): {
+                                "AccountName": "guest",
+                                "PersonaName": "Guest Player",
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+
+            with (
+                patch("builtins.input", return_value="2"),
+                redirect_stdout(output),
+            ):
+                selected = blrevive_steam_setup.choose_user_dir(root, requested=None)
+
+            self.assertEqual(selected, userdata / "67890")
+            self.assertNotIn("user ID 0", output.getvalue())
+            self.assertIn("Cow Player (@cow)", output.getvalue())
+            self.assertIn("Guest Player (@guest)", output.getvalue())
 
     def test_prompt_keep_download_accepts_yes_and_defaults_to_no(self) -> None:
         with patch("builtins.input", side_effect=("invalid", "yes")):

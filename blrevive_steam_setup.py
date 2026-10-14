@@ -27,6 +27,7 @@ import sys
 import tempfile
 import time
 import zlib
+from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
@@ -40,6 +41,7 @@ from installer_errors import InstallationPaused
 
 APP_NAME = "BLRevive"
 PROTON_TOOL_NAME = "proton_experimental"
+STEAM_ID64_BASE = 76561197960265728
 LAUNCH_OPTIONS = (
     "-zcureurl=blrrevive.ddd-game.de "
     "-zcureport=80 "
@@ -227,10 +229,7 @@ def choose_user_dir(steam_root: Path, requested: str | None) -> Path:
     if not userdata.is_dir():
         raise RuntimeError(f"Steam userdata directory not found: {userdata}")
 
-    users = sorted(
-        (p for p in userdata.iterdir() if p.is_dir() and p.name.isdigit()),
-        key=lambda p: p.name,
-    )
+    users = steam_userdata_dirs(steam_root)
     if requested:
         selected = userdata / requested
         if not selected.is_dir():
@@ -241,13 +240,28 @@ def choose_user_dir(steam_root: Path, requested: str | None) -> Path:
     if len(users) == 1:
         return users[0]
 
+    labels = steam_user_labels(steam_root, users)
     print("Found multiple Steam user directories:")
     for i, user in enumerate(users, 1):
-        print(f"  {i}. {user.name}")
+        print(f"  {i}. {labels[user]}")
     while True:
-        raw = input("Choose the Steam user number (not the Steam account name): ").strip()
+        raw = input("Choose the Steam user number: ").strip()
         if raw.isdigit() and 1 <= int(raw) <= len(users):
             return users[int(raw) - 1]
+
+
+def steam_userdata_dirs(steam_root: Path) -> list[Path]:
+    userdata = steam_root / "userdata"
+    if not userdata.is_dir():
+        return []
+    return sorted(
+        (
+            path
+            for path in userdata.iterdir()
+            if path.is_dir() and path.name.isdigit() and int(path.name) != 0
+        ),
+        key=lambda path: path.name,
+    )
 
 
 def backup_file(path: Path) -> Path | None:
@@ -476,20 +490,18 @@ def _automatic_steam_root() -> Path:
 
 def _automatic_user_dir(
     steam_root: Path,
-    on_choose_user: Callable[[list[Path]], Path | None] | None = None,
+    on_choose_user: Callable[[list[tuple[Path, str]]], Path | None] | None = None,
 ) -> Path:
     userdata = steam_root / "userdata"
-    users = sorted(
-        (path for path in userdata.iterdir() if path.is_dir() and path.name.isdigit()),
-        key=lambda path: path.name,
-    ) if userdata.is_dir() else []
+    users = steam_userdata_dirs(steam_root)
     if not users:
         raise RuntimeError(f"No numeric Steam user directories found in {userdata}")
     if len(users) == 1:
         return users[0]
 
+    choices = [(user, label) for user, label in steam_user_labels(steam_root, users).items()]
     selected = (
-        on_choose_user(users)
+        on_choose_user(choices)
         if on_choose_user is not None
         else choose_user_dir(steam_root, requested=None)
     )
@@ -499,6 +511,44 @@ def _automatic_user_dir(
     if selected not in users:
         raise ValueError("The selected Steam user directory is not valid.")
     return selected
+
+
+def steam_user_labels(steam_root: Path, users: list[Path]) -> dict[Path, str]:
+    """Resolve human-readable display/account names from Steam's loginusers.vdf."""
+    user_data = load_text_vdf(steam_root / "config" / "loginusers.vdf").get("users", {})
+    labels: dict[Path, str] = {}
+    account_names: dict[Path, str] = {}
+    for user in users:
+        record: object = {}
+        if isinstance(user_data, dict):
+            try:
+                steam_id64 = str(STEAM_ID64_BASE + int(user.name))
+            except ValueError:
+                steam_id64 = ""
+            record = user_data.get(steam_id64, user_data.get(user.name, {}))
+        if not isinstance(record, dict):
+            record = {}
+        display_name = str(record.get("PersonaName", "")).strip()
+        account_name = str(record.get("AccountName", "")).strip()
+        account_names[user] = account_name
+        if display_name and account_name and display_name.casefold() != account_name.casefold():
+            labels[user] = f"{display_name} (@{account_name})"
+        else:
+            labels[user] = display_name or account_name or "Steam account name unavailable"
+
+    duplicate_labels = {
+        label for label, count in Counter(labels.values()).items() if count > 1
+    }
+    for user, label in labels.items():
+        if label in duplicate_labels and account_names[user] and f"@{account_names[user]}" not in label:
+            labels[user] = f"{label} (@{account_names[user]})"
+    duplicate_labels = {
+        label for label, count in Counter(labels.values()).items() if count > 1
+    }
+    for user, label in labels.items():
+        if label in duplicate_labels or label == "Steam account name unavailable":
+            labels[user] = f"{labels[user]} (user ID {user.name})"
+    return labels
 
 
 def steam_game_id(shortcut_appid: int) -> int:
@@ -511,7 +561,7 @@ def configure_steam_shortcut(
     game_app_id: str,
     launch_options: str = LAUNCH_OPTIONS,
     on_steam_prompt: Callable[[], bool] | None = None,
-    on_choose_user: Callable[[list[Path]], Path | None] | None = None,
+    on_choose_user: Callable[[list[tuple[Path, str]]], Path | None] | None = None,
 ) -> tuple[int, Path]:
     """Write the BLRevive shortcut and return its generated ID and Steam root."""
     if game_app_id not in {"480", "209870"}:
