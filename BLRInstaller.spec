@@ -1,12 +1,16 @@
 from pathlib import Path
-
+import sys
 project_directory = Path(SPECPATH)
 
 a = Analysis(
     [str(project_directory / "installer.py")],
     pathex=[str(project_directory)],
     binaries=[],
-    datas=[(str(project_directory / "config.json"), ".")],
+    datas=[
+        (str(project_directory / "config.json"), "."),
+        (str(project_directory / "icon.ico"), "."),
+        (str(project_directory / "icon.png"), ".")
+    ],
     hiddenimports=['PIL._tkinter_finder'],
     hookspath=[],
     hooksconfig={},
@@ -21,7 +25,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="BLReviveInstallerV1",
+    name="BLReviveInstallerV1_" + ('Windows' if sys.platform == 'win32' else 'Linux'),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -34,4 +38,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon="icon.ico"
 )

@@ -22,8 +22,16 @@ if getattr(sys, "frozen", False):
     _bundle_directory = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
     _external_config = Path(sys.executable).resolve().parent / "config.json"
     CONFIG_FILE = _external_config if _external_config.is_file() else _bundle_directory / "config.json"
+    if sys.platform == "win32":
+        ICON_FILE = _bundle_directory / "icon.ico"
+    else:
+        ICON_FILE = _bundle_directory / "icon.png"
 else:
     CONFIG_FILE = Path(__file__).with_name("config.json")
+    if sys.platform == "win32":
+        ICON_FILE = Path(__file__).with_name("icon.ico")
+    else:
+        ICON_FILE = Path(__file__).with_name("icon.png")
 
 
 def load_config() -> dict[str, object]:

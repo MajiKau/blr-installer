@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from logging import root
 import queue
+import sys
 import threading
 import tkinter as tk
 import zipfile
@@ -11,7 +12,7 @@ from tkinter import filedialog, messagebox, simpledialog
 
 import ttkbootstrap as ttk
 
-from installer_config import STEAM_OPTIONS, load_zip_url
+from installer_config import ICON_FILE, STEAM_OPTIONS, load_zip_url
 from installer_download import (
     discard_download_cache,
     format_size,
@@ -28,6 +29,10 @@ class InstallerWindow:
     def __init__(self, root: ttk.App) -> None:
         self.root = root
         self.root.title("Blacklight: Retribution Installer")
+        if sys.platform == "win32":
+            self.root.iconbitmap(ICON_FILE)
+        else:
+            self.root.iconphoto(True, tk.PhotoImage(file=ICON_FILE))
         self.root.minsize(520, 300)
         self.root.resizable(True, True)
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
