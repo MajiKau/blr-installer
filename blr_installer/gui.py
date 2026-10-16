@@ -146,22 +146,22 @@ class InstallerWindow:
         self.progress.grid(row=8, column=0, columnspan=2, sticky="ew")
 
         actions = ttk.Frame(frame)
-        actions.grid(row=9, column=0, columnspan=2, sticky="e", pady=(20, 0))
+        actions.grid(row=9, column=0, columnspan=2, sticky="wes", pady=(20, 0))
         self.launch_button = ttk.Button(
             actions,
-            text="Launch game",
+            text="Launch through Steam",
             command=self._launch_game,
             state="disabled",
             bootstyle="success",
         )
-        self.launch_button.pack(side="left", padx=(0, 8))
+        self.launch_button.pack(side="left")
         self.start_button = ttk.Button(
             actions,
             text="Install",
             command=self._install_action,
             bootstyle="danger",
         )
-        self.start_button.pack(side="left")
+        self.start_button.pack(side="right")
         frame.columnconfigure(0, weight=1)
 
     def _browse_destination(self) -> None:
