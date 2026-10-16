@@ -63,24 +63,51 @@ def read_job_state(path: Path, url: str) -> dict[str, object] | None:
 
 
 def remember_destination(destination: Path) -> None:
-    atomic_write_json(
-        state_directory() / "settings.json",
-        {"last_destination": str(destination.expanduser().resolve())},
-    )
+    settings = _read_settings()
+    settings["last_destination"] = str(destination.expanduser().resolve())
+    atomic_write_json(state_directory() / "settings.json", settings)
 
 
-def last_destination() -> Path:
+def _read_settings() -> dict[str, object]:
     settings_path = state_directory() / "settings.json"
     try:
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return default_destination()
+        return {}
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Could not read saved installer settings: {exc}") from exc
-    value = settings.get("last_destination") if isinstance(settings, dict) else None
+
+    if not isinstance(settings, dict):
+        raise ValueError(f"Saved installer settings are invalid: {settings_path}")
+    return settings
+
+
+def last_destination() -> Path:
+    settings = _read_settings()
+    value = settings.get("last_destination")
+    if value is None:
+        return default_destination()
     if not isinstance(value, str) or not value:
+        settings_path = state_directory() / "settings.json"
         raise ValueError(f"Saved installer settings are invalid: {settings_path}")
     return Path(value)
+
+
+def keep_download_preference() -> bool:
+    settings = _read_settings()
+    value = settings.get("keep_download", False)
+    if not isinstance(value, bool):
+        settings_path = state_directory() / "settings.json"
+        raise ValueError(f"Saved installer settings are invalid: {settings_path}")
+    return value
+
+
+def remember_keep_download(keep_download: bool) -> None:
+    if not isinstance(keep_download, bool):
+        raise ValueError("The keep-download preference must be a boolean.")
+    settings = _read_settings()
+    settings["keep_download"] = keep_download
+    atomic_write_json(state_directory() / "settings.json", settings)
 
 
 def destination_key(destination: Path) -> str:

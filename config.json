@@ -1,5 +1,7 @@
 {
   "zip_url": "https://ddd-cloud.com/blrzip",
+  "zip_size_gib": 5.6,
+  "uncompressed_size_gib": 6.6,
   "launch_args": [
     "-zcureurl=blrrevive.ddd-game.de",
     "-zcureport=80",

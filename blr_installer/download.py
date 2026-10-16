@@ -33,9 +33,54 @@ def metadata_path(download_path: Path) -> Path:
     return download_path.with_suffix(download_path.suffix + ".json")
 
 
+def completed_download_path(download_path: Path) -> Path:
+    if download_path.suffix != ".part":
+        raise ValueError(f"Expected a partial download path ending in '.part': {download_path}")
+    return download_path.with_suffix("")
+
+
+def cached_download_path(download_path: Path) -> Path:
+    completed_path = completed_download_path(download_path)
+    return (
+        completed_path
+        if completed_path.is_file() and zipfile.is_zipfile(completed_path)
+        else download_path
+    )
+
+
+def normalize_cached_download(download_path: Path) -> Path:
+    completed_path = completed_download_path(download_path)
+    if completed_path.is_file() and zipfile.is_zipfile(completed_path):
+        download_path.unlink(missing_ok=True)
+        metadata_path(download_path).unlink(missing_ok=True)
+        return completed_path
+    if download_path.is_file() and zipfile.is_zipfile(download_path):
+        return _finalize_download(download_path)
+    return download_path
+
+
 def discard_download_cache(download_path: Path) -> None:
     download_path.unlink(missing_ok=True)
     metadata_path(download_path).unlink(missing_ok=True)
+    completed_path = completed_download_path(download_path)
+    completed_path.unlink(missing_ok=True)
+    metadata_path(completed_path).unlink(missing_ok=True)
+
+
+def _finalize_download(download_path: Path) -> Path:
+    if not zipfile.is_zipfile(download_path):
+        return download_path
+
+    completed_path = completed_download_path(download_path)
+    completed_metadata = metadata_path(completed_path)
+    partial_metadata = metadata_path(download_path)
+    if download_path != completed_path:
+        completed_path.unlink(missing_ok=True)
+        download_path.replace(completed_path)
+    if partial_metadata.is_file():
+        completed_metadata.unlink(missing_ok=True)
+        partial_metadata.replace(completed_metadata)
+    return completed_path
 
 
 def _save_resume_metadata(path: Path, metadata: dict[str, str]) -> None:
@@ -93,7 +138,23 @@ def download_zip(
     download_path: Path,
     on_progress: Callable[[str, int, int | None], None] | None = None,
     pause_event: threading.Event | None = None,
-) -> None:
+) -> Path:
+    completed_path = completed_download_path(download_path)
+    if completed_path.is_file():
+        if zipfile.is_zipfile(completed_path):
+            size = completed_path.stat().st_size
+            _report_progress("Download", size, size, on_progress)
+            if on_progress is None:
+                finish_progress()
+            download_path.unlink(missing_ok=True)
+            metadata_path(download_path).unlink(missing_ok=True)
+            return completed_path
+        completed_path.unlink()
+        metadata_path(completed_path).unlink(missing_ok=True)
+
+    if download_path.is_file() and zipfile.is_zipfile(download_path):
+        return _finalize_download(download_path)
+
     resume_metadata_path = metadata_path(download_path)
     metadata = read_resume_metadata(resume_metadata_path, url, download_path)
     offset = download_path.stat().st_size if metadata else 0
@@ -109,7 +170,7 @@ def download_zip(
             _report_progress("Download", offset, offset, on_progress)
             if on_progress is None:
                 finish_progress()
-            return
+            return _finalize_download(download_path)
         download_path.unlink(missing_ok=True)
         resume_metadata_path.unlink(missing_ok=True)
         offset = 0
@@ -126,10 +187,11 @@ def download_zip(
             raise
         content_range = exc.headers.get("Content-Range", "")
         if content_range == f"bytes */{offset}":
-            _report_progress("Download", offset, offset, on_progress)
-            if on_progress is None:
-                finish_progress()
-            return
+            if zipfile.is_zipfile(download_path):
+                _report_progress("Download", offset, offset, on_progress)
+                if on_progress is None:
+                    finish_progress()
+                return _finalize_download(download_path)
         download_path.unlink(missing_ok=True)
         resume_metadata_path.unlink(missing_ok=True)
         metadata = {"url_hash": url_hash}
@@ -174,7 +236,7 @@ def download_zip(
                     on_progress=on_progress,
                     pause_event=pause_event,
                 )
-            return
+            return _finalize_download(download_path)
 
         if status == 200 and offset:
             metadata = {"url_hash": url_hash}
@@ -189,6 +251,7 @@ def download_zip(
             on_progress,
             pause_event,
         )
+    return _finalize_download(download_path)
 
 
 def _write_download_response(

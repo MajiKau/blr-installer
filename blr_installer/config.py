@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 import urllib.parse
 from pathlib import Path
@@ -70,3 +71,24 @@ def load_launch_args() -> tuple[str, ...]:
             f"The 'launch_args' field in {CONFIG_FILE.name} must be a list of non-empty strings."
         )
     return tuple(launch_args)
+
+
+def load_size_estimates() -> tuple[int | None, int | None]:
+    config = load_config()
+    estimates: list[int | None] = []
+    for key in ("zip_size_gib", "uncompressed_size_gib"):
+        value = config.get(key)
+        if value is None:
+            estimates.append(None)
+            continue
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(
+                f"The '{key}' field in {CONFIG_FILE.name} must be a positive number of GiB."
+            )
+        estimates.append(round(value * 1024**3))
+    return estimates[0], estimates[1]

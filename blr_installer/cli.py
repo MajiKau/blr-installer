@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 
 from .config import load_zip_url
-from .download import discard_download_cache
+from .download import cached_download_path, discard_download_cache
 from .errors import InstallationPaused
 from .service import run_install as _run_install
 from .state import (
@@ -73,7 +73,8 @@ def install() -> None:
             state["steam_app_id"] = steam_app_id
         state["phase"] = (
             "extracting"
-            if state.get("phase") == "extracting" and download_path.is_file()
+            if state.get("phase") == "extracting"
+            and cached_download_path(download_path).is_file()
             else "downloading"
         )
         _remember_destination(destination)
@@ -95,7 +96,7 @@ def install() -> None:
     while True:
         _run_install(url, state_path, download_path, state)
         if _prompt_keep_download():
-            print(f"Keeping downloaded ZIP at {download_path}")
+            print(f"Keeping downloaded ZIP at {cached_download_path(download_path)}")
         else:
             discard_download_cache(download_path)
             print("Downloaded ZIP removed.")

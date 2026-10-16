@@ -29,11 +29,15 @@ otherwise, they restart from the beginning. During extraction, Ctrl+C pauses at
 the current file chunk. Completed files and the current file offset are saved,
 so extraction can resume without re-extracting completed data. Changing the
 install folder resets extraction progress for that folder while retaining the
-downloaded ZIP for resuming that install. Progress is shown as a percentage when the total size is known,
-or as transferred bytes otherwise.
-The GUI's “Keep downloaded ZIP for faster reinstalls” checkbox is off by
-default. If enabled, a later reinstall reuses the cached archive; otherwise,
-the downloaded ZIP is removed after installation.
+downloaded ZIP for resuming that install. Incomplete downloads use a `.zip.part`
+suffix; after a complete ZIP is received, it is renamed to `.zip`. Progress is
+shown as a percentage when the total size is known, or as transferred bytes
+otherwise.
+The GUI remembers the “Keep downloaded ZIP for faster reinstalls” checkbox
+setting. When it is unchecked and no installation is in progress, the installer
+asks whether to delete an existing cached ZIP now or keep it for the next
+reinstall. If unchecked during an interrupted installation, the ZIP remains
+available for resuming and is removed after installation completes.
 
 ## Configure
 
@@ -42,6 +46,8 @@ Edit `config.json` and set `zip_url` to the HTTPS or HTTP URL of the ZIP file:
 ```json
 {
   "zip_url": "https://example.com/download.zip",
+  "zip_size_gib": 5.6,
+  "uncompressed_size_gib": 6.6,
   "launch_args": [
     "-zcureurl=blrrevive.ddd-game.de",
     "-zcureport=80",
@@ -53,6 +59,10 @@ Edit `config.json` and set `zip_url` to the HTTPS or HTTP URL of the ZIP file:
 
 `launch_args` is an array of arguments passed to the Steam shortcut. Omit it to
 use the defaults shown above, or set it to an empty array for no launch arguments.
+`zip_size_gib` and `uncompressed_size_gib` are optional size estimates in
+gibibytes (GiB, where 1 GiB is 1024³ bytes), used by the GUI's pre-install
+space check when the ZIP is not yet available. Once a complete ZIP is present,
+the installer reads the actual uncompressed size from its contents.
 
 ## Run
 
@@ -65,7 +75,7 @@ python -m pip install -r requirements.txt
 - **GUI:** `py installer.py` on Windows or `python3 installer.py` on Linux.
 - **Terminal:** add `--cli` to either command.
 
-The GUI uses ttkbootstrap's built-in `pydata-dark` theme.
+The GUI uses ttkbootstrap's built-in `bootstrap-dark` theme.
 
 ## Run tests
 
@@ -75,12 +85,15 @@ Run the test suite from the repository root:
 python -m unittest discover
 ```
 
-The GUI has checkboxes for keeping the downloaded ZIP and using App ID 209870
- (which requires owning the game on Steam); unchecked, it
-uses App ID 480. It also allows choosing the install folder, shows download and
-extraction progress, and uses one action button to install, pause, or continue
-an installation. Closing the GUI while an operation is active requests a pause
-and saves progress.
+The GUI has a checkbox for keeping the downloaded ZIP and a checkbox for having
+Steam recognize the game as Blacklight: Retribution (requires owning the game on
+Steam). When unchecked, it uses App ID 480. Before installation it reports
+available space and warns about an existing game folder. Configured size
+estimates are used until a complete ZIP is available. Download and extraction
+progress includes a transfer rate and estimated time remaining when those can be
+calculated. The GUI also allows choosing the install folder and uses one action
+button to install, pause, or continue an installation. Closing the GUI while an
+operation is active requests a pause and saves progress.
 
 The terminal version prompts for whether you own the game on Steam, whether to
 keep the downloaded ZIP, and for an install folder (press Enter to use the

@@ -12,9 +12,11 @@ from unittest.mock import Mock, patch
 from urllib.request import Request
 
 from blr_installer import cli as installer
+from blr_installer import config as installer_config
 from blr_installer import download as installer_download
 from blr_installer import errors as installer_errors
 from blr_installer import extract as installer_extract
+from blr_installer import gui as installer_gui
 from blr_installer import service as installer_service
 from blr_installer import state as installer_state
 from blr_installer import steam as blrevive_steam_setup
@@ -128,15 +130,30 @@ class SafeExtractTests(unittest.TestCase):
             self.assertIsNotNone(state)
             self.assertEqual(state["steam_app_id"], "480")
 
+    def test_saved_keep_download_preference_survives_destination_updates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with patch.object(installer_state, "state_directory", return_value=root):
+                installer_state.remember_keep_download(True)
+                installer_state.remember_destination(root / "install")
+
+                self.assertTrue(installer_state.keep_download_preference())
+                settings = json.loads((root / "settings.json").read_text(encoding="utf-8"))
+                self.assertEqual(settings["last_destination"], str((root / "install").resolve()))
+                self.assertTrue(settings["keep_download"])
+
     def test_install_writes_selected_app_id(self) -> None:
         for app_id in ("209870", "480"):
             with self.subTest(app_id=app_id), tempfile.TemporaryDirectory() as temp_dir:
                 root = Path(temp_dir)
                 destination = root / "install"
 
-                def create_test_zip(_: str, download_path: Path, *_args: object) -> None:
+                def create_test_zip(_: str, download_path: Path, *_args: object) -> Path:
                     with zipfile.ZipFile(download_path, "w") as archive:
                         archive.writestr("blacklightretribution/Binaries/Win32/game.exe", b"game")
+                    completed_path = download_path.with_suffix("")
+                    download_path.replace(completed_path)
+                    return completed_path
 
                 with (
                     patch.object(installer, "_state_directory", return_value=root / "state"),
@@ -170,7 +187,7 @@ class SafeExtractTests(unittest.TestCase):
                 )
                 self.assertEqual(saved_state["phase"], "complete")
                 self.assertEqual(saved_state["destination"], str(destination.resolve()))
-                self.assertTrue((root / "state" / f"download-{url_hash}.zip.part").is_file())
+                self.assertTrue((root / "state" / f"download-{url_hash}.zip").is_file())
 
     def test_completed_install_prompts_to_launch_and_keeps_completion_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -617,19 +634,56 @@ class SafeExtractTests(unittest.TestCase):
                 "urlopen",
                 side_effect=AssertionError("complete ZIP should be reused"),
             ):
-                installer_download.download_zip(url, download_path)
+                completed_path = installer_download.download_zip(url, download_path)
+
+            self.assertEqual(completed_path, download_path.with_suffix(""))
+            self.assertTrue(completed_path.is_file())
+            self.assertFalse(download_path.exists())
+
+    def test_completed_download_is_renamed_and_metadata_moves_with_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            download_path = Path(temp_dir) / "package.zip.part"
+            completed_path = download_path.with_suffix("")
+            url = "https://example.test/package.zip"
+            archive_buffer = io.BytesIO()
+            with zipfile.ZipFile(archive_buffer, "w") as archive:
+                archive.writestr("game.bin", b"game")
+            archive_bytes = archive_buffer.getvalue()
+            response = FakeResponse(
+                archive_bytes,
+                200,
+                {"Content-Length": str(len(archive_bytes)), "ETag": '"version-1"'},
+            )
+
+            with patch.object(
+                installer_download.urllib.request,
+                "urlopen",
+                return_value=response,
+            ):
+                result = installer_download.download_zip(url, download_path)
+
+            self.assertEqual(result, completed_path)
+            self.assertTrue(zipfile.is_zipfile(completed_path))
+            self.assertFalse(download_path.exists())
+            self.assertFalse(installer_download.metadata_path(download_path).exists())
+            self.assertTrue(installer_download.metadata_path(completed_path).exists())
 
     def test_discard_download_cache_removes_archive_and_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             download_path = Path(temp_dir) / "package.zip.part"
             resume_metadata_path = installer_download.metadata_path(download_path)
+            completed_path = download_path.with_suffix("")
             download_path.write_bytes(b"archive")
             resume_metadata_path.write_text("{}", encoding="utf-8")
+            completed_path.write_bytes(b"completed archive")
+            installer_download.metadata_path(completed_path).write_text("{}", encoding="utf-8")
 
             installer_download.discard_download_cache(download_path)
 
             self.assertFalse(download_path.exists())
             self.assertFalse(resume_metadata_path.exists())
+            self.assertFalse(completed_path.exists())
+            self.assertFalse(installer_download.metadata_path(completed_path).exists())
 
     def test_extraction_reports_byte_progress(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -850,6 +904,251 @@ class SafeExtractTests(unittest.TestCase):
             self.assertEqual(json.loads(state_path.read_text(encoding="utf-8"))["phase"], "complete")
             settings = json.loads((state_directory / "settings.json").read_text(encoding="utf-8"))
             self.assertEqual(settings["last_destination"], str(destination.resolve()))
+
+    def test_gui_progress_rate_and_eta_are_formatted(self) -> None:
+        window = object.__new__(installer_gui.InstallerWindow)
+        window.progress_stage = None
+        window.progress_sample_time = None
+        window.progress_sample_bytes = 0
+        window.progress_rate = None
+
+        with patch.object(installer_gui.time, "monotonic", side_effect=(10.0, 12.0, 13.0)):
+            self.assertIsNone(window._update_progress_rate("Download", 0))
+            self.assertEqual(window._update_progress_rate("Download", 1024 * 1024), 524288)
+            self.assertIsNone(window._update_progress_rate("Extract", 1024 * 1024))
+
+        self.assertEqual(window._format_eta(65), "1m 5s")
+        self.assertEqual(window._format_eta(3661), "1h 1m")
+
+    def test_gui_preflight_warns_about_existing_install_and_low_space(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            destination = root / "install"
+            game_folder = destination / GAME_EXECUTABLE.parent.parent.parent
+            game_folder.mkdir(parents=True)
+            (destination / GAME_EXECUTABLE).parent.mkdir(parents=True, exist_ok=True)
+            (destination / GAME_EXECUTABLE).write_bytes(b"existing game")
+            download_path = root / "state" / "download.zip.part"
+            download_path.parent.mkdir()
+            with zipfile.ZipFile(download_path, "w") as archive:
+                archive.writestr(str(GAME_EXECUTABLE).replace("\\", "/"), b"new game")
+
+            url = "https://example.test/game.zip"
+            installer_download.metadata_path(download_path).write_text(
+                json.dumps(
+                    {
+                        "url_hash": hashlib.sha256(url.encode("utf-8")).hexdigest(),
+                        "total_bytes": str(download_path.stat().st_size),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            window = object.__new__(installer_gui.InstallerWindow)
+            window.root = Mock()
+            window.download_path = download_path
+            window.url = url
+            window.state = None
+
+            with (
+                patch.object(
+                    installer_gui.shutil,
+                    "disk_usage",
+                    return_value=Mock(free=1),
+                ),
+                patch.object(installer_gui.messagebox, "askyesno", return_value=False) as ask,
+            ):
+                self.assertFalse(window._confirm_preflight(destination))
+
+            message = ask.call_args.args[1]
+            self.assertIn("existing game installation was found", message)
+            self.assertIn("not be enough free space to extract", message)
+
+    def test_configured_size_estimates_are_read_as_gibibytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "zip_size_gib": 5.6,
+                        "uncompressed_size_gib": 6.6,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(installer_config, "CONFIG_FILE", config_path):
+                self.assertEqual(
+                    installer_config.load_size_estimates(),
+                    (round(5.6 * 1024**3), round(6.6 * 1024**3)),
+                )
+
+            config_path.write_text("{}", encoding="utf-8")
+            with patch.object(installer_config, "CONFIG_FILE", config_path):
+                self.assertEqual(installer_config.load_size_estimates(), (None, None))
+
+            config_path.write_text(
+                json.dumps({"zip_size_gib": -1}),
+                encoding="utf-8",
+            )
+            with patch.object(installer_config, "CONFIG_FILE", config_path):
+                with self.assertRaisesRegex(ValueError, "positive number of GiB"):
+                    installer_config.load_size_estimates()
+
+    def test_gui_preflight_uses_configured_sizes_before_download(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            window = object.__new__(installer_gui.InstallerWindow)
+            window.root = Mock()
+            window.download_path = root / "state" / "download.zip.part"
+            window.url = "https://example.test/game.zip"
+            window.state = None
+            zip_size = round(5.6 * 1024**3)
+            uncompressed_size = round(6.6 * 1024**3)
+
+            with (
+                patch.object(
+                    installer_gui,
+                    "load_size_estimates",
+                    return_value=(zip_size, uncompressed_size),
+                ),
+                patch.object(
+                    installer_gui.shutil,
+                    "disk_usage",
+                    return_value=Mock(free=10 * 1024**3),
+                ),
+                patch.object(installer_gui.messagebox, "askyesno", return_value=True) as ask,
+            ):
+                self.assertTrue(window._confirm_preflight(root / "install"))
+
+            message = ask.call_args.args[1]
+            self.assertIn("Additional download space: 5.6 GiB", message)
+            self.assertIn("Uncompressed size: about 6.6 GiB", message)
+
+    def test_gui_preflight_does_not_prompt_when_there_are_no_issues(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            window = object.__new__(installer_gui.InstallerWindow)
+            window.root = Mock()
+            window.download_path = root / "state" / "download.zip.part"
+            window.url = "https://example.test/game.zip"
+            window.state = None
+
+            with (
+                patch.object(
+                    installer_gui,
+                    "load_size_estimates",
+                    return_value=(round(5.6 * 1024**3), round(6.6 * 1024**3)),
+                ),
+                patch.object(
+                    installer_gui.shutil,
+                    "disk_usage",
+                    return_value=Mock(free=20 * 1024**3, st_dev=1),
+                ),
+                patch.object(installer_gui.messagebox, "askyesno") as ask,
+            ):
+                self.assertTrue(window._confirm_preflight(root / "install"))
+
+            ask.assert_not_called()
+
+    def test_gui_preflight_does_not_warn_about_install_being_extracted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            destination = root / "install"
+            game_executable = destination / GAME_EXECUTABLE
+            game_executable.parent.mkdir(parents=True)
+            game_executable.write_bytes(b"partially extracted game")
+            download_path = root / "state" / "download.zip.part"
+            download_path.parent.mkdir()
+            with zipfile.ZipFile(download_path, "w") as archive:
+                archive.writestr(
+                    str(GAME_EXECUTABLE).replace("\\", "/"),
+                    b"complete game",
+                )
+
+            window = object.__new__(installer_gui.InstallerWindow)
+            window.root = Mock()
+            window.download_path = download_path
+            window.url = "https://example.test/game.zip"
+            window.state = {
+                "phase": "extracting",
+                "destination": str(destination.resolve()),
+            }
+
+            with (
+                patch.object(
+                    installer_gui,
+                    "load_size_estimates",
+                    return_value=(None, None),
+                ),
+                patch.object(
+                    installer_gui.shutil,
+                    "disk_usage",
+                    return_value=Mock(free=20 * 1024**3, st_dev=1),
+                ),
+                patch.object(installer_gui.messagebox, "askyesno") as ask,
+            ):
+                self.assertTrue(window._confirm_preflight(destination))
+
+            ask.assert_not_called()
+
+    def test_unchecking_keep_download_prompts_to_delete_cached_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            download_path = root / "download.zip.part"
+            completed_path = download_path.with_suffix("")
+            with zipfile.ZipFile(completed_path, "w") as archive:
+                archive.writestr("game.bin", b"cached archive")
+            installer_download.metadata_path(completed_path).write_text("{}", encoding="utf-8")
+            window = object.__new__(installer_gui.InstallerWindow)
+            window.root = Mock()
+            window.state_path = root / "install.json"
+            window.url = "https://example.test/game.zip"
+            window.download_path = download_path
+            window.keep_download_var = Mock()
+            window.keep_download_var.get.return_value = False
+            window.saved_keep_download = True
+            window.state = None
+
+            with (
+                patch.object(installer_gui, "read_job_state", return_value=None),
+                patch.object(installer_gui, "remember_keep_download") as save_preference,
+                patch.object(installer_gui.messagebox, "askyesno", return_value=True) as ask,
+            ):
+                window._keep_download_changed()
+
+            save_preference.assert_called_once_with(False)
+            ask.assert_called_once()
+            self.assertIn("Choose No to keep it for the next reinstall.", ask.call_args.args[1])
+            self.assertFalse(completed_path.exists())
+            self.assertFalse(installer_download.metadata_path(completed_path).exists())
+
+    def test_unchecking_keep_download_does_not_prompt_during_installation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            download_path = root / "download.zip.part"
+            download_path.write_bytes(b"partial archive")
+            window = object.__new__(installer_gui.InstallerWindow)
+            window.root = Mock()
+            window.state_path = root / "install.json"
+            window.url = "https://example.test/game.zip"
+            window.download_path = download_path
+            window.keep_download_var = Mock()
+            window.keep_download_var.get.return_value = False
+            window.saved_keep_download = True
+            window.state = None
+            active_state = {"phase": "extracting", "destination": str(root / "install")}
+
+            with (
+                patch.object(installer_gui, "read_job_state", return_value=active_state),
+                patch.object(installer_gui, "remember_keep_download") as save_preference,
+                patch.object(installer_gui.messagebox, "askyesno") as ask,
+            ):
+                window._keep_download_changed()
+
+            save_preference.assert_called_once_with(False)
+            ask.assert_not_called()
+            self.assertTrue(download_path.is_file())
+            self.assertIs(window.state, active_state)
 
 
 if __name__ == "__main__":

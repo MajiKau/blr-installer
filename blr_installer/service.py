@@ -17,7 +17,7 @@ from .config import (
     load_launch_args,
     load_zip_url,
 )
-from .download import download_zip
+from .download import cached_download_path, download_zip, normalize_cached_download
 from .extract import safe_extract
 from .progress import finish_progress, show_progress
 from .state import (
@@ -46,12 +46,17 @@ def run_install(
     destination.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(state_path, state)
 
-    if state.get("phase") != "extracting" or not download_path.is_file():
+    if (
+        state.get("phase") == "extracting"
+        and cached_download_path(download_path).is_file()
+    ):
+        download_path = normalize_cached_download(download_path)
+    else:
         if on_progress is None:
             print("Downloading ZIP. Press Ctrl+C to pause and save progress.")
         state["phase"] = "downloading"
         atomic_write_json(state_path, state)
-        download_zip(url, download_path, on_progress, pause_event)
+        download_path = download_zip(url, download_path, on_progress, pause_event)
 
     state["phase"] = "extracting"
     atomic_write_json(state_path, state)
@@ -132,7 +137,10 @@ def install_configured(
     else:
         state["destination"] = str(destination)
         state["steam_app_id"] = steam_app_id
-        if state.get("phase") == "extracting" and not download_path.is_file():
+        if (
+            state.get("phase") == "extracting"
+            and not cached_download_path(download_path).is_file()
+        ):
             state["phase"] = "downloading"
         elif state.get("phase") != "extracting":
             state["phase"] = "downloading"

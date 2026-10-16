@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import hashlib
-from logging import root
 import queue
+import shutil
 import sys
 import threading
+import time
 import tkinter as tk
 import zipfile
 from pathlib import Path
@@ -12,8 +13,15 @@ from tkinter import filedialog, messagebox, simpledialog
 
 import ttkbootstrap as ttk
 
-from .config import ICON_FILE, STEAM_OPTIONS, load_zip_url
+from .config import (
+    GAME_EXECUTABLE,
+    ICON_FILE,
+    STEAM_OPTIONS,
+    load_size_estimates,
+    load_zip_url,
+)
 from .download import (
+    cached_download_path,
     discard_download_cache,
     format_size,
     metadata_path,
@@ -21,7 +29,13 @@ from .download import (
 )
 from .errors import InstallationPaused
 from .service import install_configured
-from .state import last_destination, read_job_state, state_directory
+from .state import (
+    keep_download_preference,
+    last_destination,
+    read_job_state,
+    remember_keep_download,
+    state_directory,
+)
 from .terminal_ui import launch_game
 
 
@@ -33,12 +47,16 @@ class InstallerWindow:
             self.root.iconbitmap(ICON_FILE)
         else:
             self.root.iconphoto(True, tk.PhotoImage(file=ICON_FILE))
-        self.root.minsize(520, 300)
+        self.root.minsize(540, 320)
         self.root.resizable(True, True)
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.pause_event = threading.Event()
         self.worker: threading.Thread | None = None
         self.close_when_stopped = False
+        self.progress_stage: str | None = None
+        self.progress_sample_time: float | None = None
+        self.progress_sample_bytes = 0
+        self.progress_rate: float | None = None
 
         try:
             self.url = load_zip_url()
@@ -46,6 +64,7 @@ class InstallerWindow:
             self.state_path = state_directory() / f"install-{self.url_hash}.json"
             self.download_path = state_directory() / f"download-{self.url_hash}.zip.part"
             self.state = read_job_state(self.state_path, self.url)
+            self.saved_keep_download = keep_download_preference()
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
             messagebox.showerror("Installer configuration error", str(exc), parent=root)
             root.destroy()
@@ -78,11 +97,12 @@ class InstallerWindow:
         frame = ttk.Frame(self.root, padding=20)
         frame.pack(fill="both", expand=True)
 
-        self.keep_download_var = tk.BooleanVar(value=False)
+        self.keep_download_var = tk.BooleanVar(value=self.saved_keep_download)
         self.keep_download_checkbox = ttk.Checkbutton(
             frame,
             text="Keep downloaded ZIP for faster reinstalls",
             variable=self.keep_download_var,
+            command=self._keep_download_changed,
         )
         self.keep_download_checkbox.grid(
             row=0,
@@ -98,13 +118,16 @@ class InstallerWindow:
         self.owned_app_id_var = tk.BooleanVar(value=False)
         self.app_id_checkbox = ttk.Checkbutton(
             frame,
-            text="Have Steam detect the game as Blacklight: Retribution instead of SpaceWar",
+            text="Have Steam recognize the game as Blacklight: Retribution",
             variable=self.owned_app_id_var,
         )
-        self.app_id_checkbox.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0),)
+        self.app_id_checkbox.grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(10, 0)
+        )
         ttk.Label(
             frame,
-            text="Requires owning Blacklight: Retribution on Steam.",
+            text="Requires owning Blacklight: Retribution on Steam!",
+            wraplength=480,
         ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         ttk.Label(frame, text="Install folder").grid(
@@ -135,12 +158,12 @@ class InstallerWindow:
         ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         self.status_var = tk.StringVar(value="Ready.")
-        ttk.Label(frame, textvariable=self.status_var).grid(
+        ttk.Label(frame, textvariable=self.status_var, wraplength=520).grid(
             row=7,
             column=0,
             columnspan=2,
             sticky="w",
-            pady=(12, 4),
+            pady=(30, 4),
         )
         self.progress = ttk.Progressbar(frame, mode="determinate", maximum=100)
         self.progress.grid(row=8, column=0, columnspan=2, sticky="ew")
@@ -164,6 +187,47 @@ class InstallerWindow:
         self.start_button.pack(side="right")
         frame.columnconfigure(0, weight=1)
 
+    def _keep_download_changed(self) -> None:
+        keep_download = self.keep_download_var.get()
+        try:
+            current_state = read_job_state(self.state_path, self.url)
+            remember_keep_download(keep_download)
+        except (OSError, ValueError) as exc:
+            self.keep_download_var.set(self.saved_keep_download)
+            messagebox.showerror(
+                "Could not save installer settings",
+                str(exc),
+                parent=self.root,
+            )
+            return
+
+        self.saved_keep_download = keep_download
+        self.state = current_state
+        if keep_download or (
+            current_state is not None
+            and current_state.get("phase") in {"downloading", "extracting"}
+        ):
+            return
+        if not cached_download_path(self.download_path).is_file():
+            return
+
+        delete_now = messagebox.askyesno(
+            "Delete downloaded ZIP?",
+            "Delete the cached ZIP now? Choose No to keep it for the next reinstall.",
+            icon="question",
+            default=messagebox.NO,
+            parent=self.root,
+        )
+        if delete_now:
+            try:
+                discard_download_cache(self.download_path)
+            except OSError as exc:
+                messagebox.showerror(
+                    "Could not delete downloaded ZIP",
+                    str(exc),
+                    parent=self.root,
+                )
+
     def _browse_destination(self) -> None:
         selected = filedialog.askdirectory(
             parent=self.root,
@@ -179,15 +243,16 @@ class InstallerWindow:
             return
         phase = self.state.get("phase")
         if phase == "downloading":
+            archive_path = cached_download_path(self.download_path)
             current = (
-                self.download_path.stat().st_size
-                if self.download_path.is_file()
+                archive_path.stat().st_size
+                if archive_path.is_file()
                 else 0
             )
             metadata = read_resume_metadata(
-                metadata_path(self.download_path),
+                metadata_path(archive_path),
                 self.url,
-                self.download_path,
+                archive_path,
             )
             total_text = metadata.get("total_bytes")
             total = int(total_text) if total_text and total_text.isdigit() else None
@@ -195,9 +260,10 @@ class InstallerWindow:
                 f"Download saved: {format_size(current)}"
                 + (f" of {format_size(total)}" if total is not None else "")
             )
-        elif phase == "extracting" and self.download_path.is_file():
+        elif phase == "extracting" and cached_download_path(self.download_path).is_file():
             try:
-                with zipfile.ZipFile(self.download_path) as archive:
+                archive_path = cached_download_path(self.download_path)
+                with zipfile.ZipFile(archive_path) as archive:
                     members = archive.infolist()
                     total = sum(member.file_size for member in members if not member.is_dir())
                     progress_map = self.state.get("extraction_progress", {})
@@ -237,13 +303,195 @@ class InstallerWindow:
             except (OSError, zipfile.BadZipFile):
                 self.status_var.set("Saved extraction progress found.")
 
+    def _confirm_preflight(self, destination: Path) -> bool:
+        existing_path = destination
+        while not existing_path.exists() and existing_path != existing_path.parent:
+            existing_path = existing_path.parent
+        if existing_path.exists() and not existing_path.is_dir():
+            messagebox.showerror(
+                "Invalid install folder",
+                f"The selected install path passes through a file, not a folder:\n"
+                f"{existing_path}",
+                parent=self.root,
+            )
+            return False
+
+        details = [f"Install folder: {destination}"]
+        warnings: list[str] = []
+        resuming_extraction_here = (
+            self.state is not None
+            and self.state.get("phase") == "extracting"
+            and isinstance(self.state.get("destination"), str)
+            and Path(str(self.state["destination"])).expanduser().resolve() == destination
+        )
+        game_folder = destination / GAME_EXECUTABLE.parent.parent.parent
+        if game_folder.exists() and not resuming_extraction_here:
+            if (destination / GAME_EXECUTABLE).is_file():
+                warnings.append(
+                    "An existing game installation was found. Files with matching names "
+                    "will be overwritten; other files will be left in place."
+                )
+            else:
+                warnings.append(
+                    "An existing blacklightretribution folder was found. Matching files "
+                    "may be overwritten; other files will be left in place."
+                )
+
+        archive_path = cached_download_path(self.download_path)
+        archive_size = archive_path.stat().st_size if archive_path.is_file() else 0
+        configured_zip_size, configured_uncompressed_size = load_size_estimates()
+        metadata = read_resume_metadata(
+            metadata_path(archive_path),
+            self.url,
+            archive_path,
+        )
+        total_text = metadata.get("total_bytes")
+        server_archive_total = (
+            int(total_text) if total_text and total_text.isdigit() else None
+        )
+        archive_total = server_archive_total or configured_zip_size
+        complete_archive = (
+            (
+                archive_path != self.download_path
+                or (
+                    self.state is not None
+                    and self.state.get("phase") in {"extracting", "complete"}
+                )
+            )
+            and archive_path.is_file()
+            and zipfile.is_zipfile(archive_path)
+        )
+        if (
+            server_archive_total is not None
+            and archive_size == server_archive_total
+            and archive_path.is_file()
+            and zipfile.is_zipfile(archive_path)
+        ):
+            complete_archive = True
+
+        extracted_size = configured_uncompressed_size
+        if complete_archive:
+            try:
+                with zipfile.ZipFile(archive_path) as archive:
+                    extracted_size = sum(
+                        member.file_size
+                        for member in archive.infolist()
+                        if not member.is_dir()
+                    )
+            except (OSError, zipfile.BadZipFile):
+                complete_archive = False
+
+        if complete_archive:
+            download_needed = 0
+        elif archive_total is None:
+            download_needed = None
+        elif server_archive_total is not None and archive_size >= server_archive_total:
+            download_needed = server_archive_total
+        else:
+            download_needed = max(archive_total - archive_size, 0)
+        if download_needed is None:
+            details.append("Additional download space: unknown")
+        else:
+            details.append(f"Additional download space: {format_size(download_needed)}")
+        if extracted_size is None:
+            details.append("Uncompressed size: unknown")
+        else:
+            details.append(f"Uncompressed size: about {format_size(extracted_size)}")
+
+        def available_space(path: Path) -> tuple[int, int] | None:
+            candidate = path
+            while not candidate.exists() and candidate != candidate.parent:
+                candidate = candidate.parent
+            if candidate.is_file():
+                candidate = candidate.parent
+            try:
+                return shutil.disk_usage(candidate).free, candidate.stat().st_dev
+            except OSError:
+                return None
+
+        download_free = available_space(self.download_path.parent)
+        if download_free is None:
+            details.append("Free space for download cache: unavailable")
+        else:
+            details.append(
+                f"Free space for download cache: {format_size(download_free[0])}"
+            )
+
+        destination_free = available_space(destination)
+        if destination_free is None:
+            details.append("Free space for installation: unavailable")
+        else:
+            details.append(
+                f"Free space for installation: {format_size(destination_free[0])}"
+            )
+
+        if (
+            download_free is not None
+            and destination_free is not None
+            and download_free[1] == destination_free[1]
+            and download_needed is not None
+            and extracted_size is not None
+        ):
+            combined_required = download_needed + extracted_size
+            if download_free[0] < combined_required:
+                if download_needed:
+                    warnings.append(
+                        "There may not be enough free space for both the download and "
+                        "extraction on this drive."
+                    )
+                else:
+                    warnings.append(
+                        "There may not be enough free space to extract the archive."
+                    )
+        else:
+            if (
+                download_free is not None
+                and download_needed is not None
+                and download_free[0] < download_needed
+            ):
+                warnings.append("There may not be enough free space for the download cache.")
+            if (
+                destination_free is not None
+                and extracted_size is not None
+                and destination_free[0] < extracted_size
+            ):
+                warnings.append("There may not be enough free space to extract the archive.")
+
+        if warnings:
+            details.extend(("", "Warnings:", *(f"- {warning}" for warning in warnings)))
+            details.extend(("", "Continue with this installation?"))
+            return messagebox.askyesno(
+                "Pre-install check",
+                "\n".join(details),
+                icon="warning",
+                default=messagebox.NO,
+                parent=self.root,
+            )
+
+        return True
+
     def _start_install(self) -> None:
         destination_text = self.destination_var.get().strip()
         if not destination_text:
             messagebox.showerror("Install folder required", "Choose an install folder.", parent=self.root)
             return
-        destination = Path(destination_text).expanduser()
+        try:
+            destination = Path(destination_text).expanduser().resolve()
+        except (OSError, RuntimeError, ValueError) as exc:
+            messagebox.showerror("Invalid install folder", str(exc), parent=self.root)
+            return
+        try:
+            continue_install = self._confirm_preflight(destination)
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            messagebox.showerror("Could not check install folder", str(exc), parent=self.root)
+            return
+        if not continue_install:
+            return
         self.pause_event.clear()
+        self.progress_stage = None
+        self.progress_sample_time = None
+        self.progress_sample_bytes = 0
+        self.progress_rate = None
         self.start_button.configure(text="Pause")
         self.start_button.state(["!disabled"])
         self.launch_button.state(["disabled"])
@@ -299,6 +547,39 @@ class InstallerWindow:
         self.worker.start()
         self.root.after(100, self._poll_events)
 
+    def _update_progress_rate(self, stage: str, current: int) -> float | None:
+        now = time.monotonic()
+        if stage != self.progress_stage or current < self.progress_sample_bytes:
+            self.progress_stage = stage
+            self.progress_sample_time = now
+            self.progress_sample_bytes = current
+            self.progress_rate = None
+            return None
+
+        if self.progress_sample_time is not None:
+            elapsed = now - self.progress_sample_time
+            transferred = current - self.progress_sample_bytes
+            if elapsed > 0 and transferred > 0:
+                sample_rate = transferred / elapsed
+                self.progress_rate = (
+                    sample_rate
+                    if self.progress_rate is None
+                    else self.progress_rate * 0.75 + sample_rate * 0.25
+                )
+                self.progress_sample_time = now
+                self.progress_sample_bytes = current
+        return self.progress_rate
+
+    @staticmethod
+    def _format_eta(seconds: int) -> str:
+        hours, remainder = divmod(max(seconds, 0), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours}h {minutes}m"
+        if minutes:
+            return f"{minutes}m {seconds}s"
+        return f"{seconds}s"
+
     def _install_action(self) -> None:
         if self.worker is not None and self.worker.is_alive():
             self._pause()
@@ -322,17 +603,25 @@ class InstallerWindow:
                 stage = str(stage)
                 current = int(current)
                 total = int(total) if total is not None else None
+                rate = self._update_progress_rate(stage, current)
                 if total is None or total == 0:
                     self.progress.configure(mode="indeterminate")
                     self.progress.start(12)
-                    self.status_var.set(f"{stage}: {format_size(current)}")
+                    progress_text = f"{stage}: {format_size(current)}"
                 else:
                     self.progress.stop()
                     self.progress.configure(mode="determinate", value=min(current / total * 100, 100))
-                    self.status_var.set(
+                    progress_text = (
                         f"{stage}: {min(current / total, 1):.0%} "
                         f"({format_size(current)} of {format_size(total)})"
                     )
+                if rate is not None:
+                    progress_text += f" | {format_size(int(rate))}/s"
+                    if total is not None and total > current:
+                        progress_text += (
+                            f" | about {self._format_eta(int((total - current) / rate))} left"
+                        )
+                self.status_var.set(progress_text)
             elif event == "steam_prompt":
                 response, answer = payload  # type: ignore[misc]
                 self.start_button.state(["disabled"])

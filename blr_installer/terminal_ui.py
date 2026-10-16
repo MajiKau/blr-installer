@@ -5,7 +5,12 @@ from pathlib import Path
 from typing import Callable
 
 from .config import GAME_EXECUTABLE, STEAM_OPTIONS, TEXT_FILE
-from .download import format_size, metadata_path, read_resume_metadata
+from .download import (
+    cached_download_path,
+    format_size,
+    metadata_path,
+    read_resume_metadata,
+)
 from .state import extraction_progress_for_destination, last_destination
 from .steam import launch_steam_shortcut
 
@@ -36,11 +41,12 @@ def show_saved_progress(
 ) -> None:
     phase = state.get("phase")
     if phase == "downloading":
-        current = download_path.stat().st_size if download_path.is_file() else 0
+        archive_path = cached_download_path(download_path)
+        current = archive_path.stat().st_size if archive_path.is_file() else 0
         metadata = read_resume_metadata(
-            metadata_path(download_path),
+            metadata_path(archive_path),
             url,
-            download_path,
+            archive_path,
         )
         total_value = metadata.get("total_bytes")
         if total_value is not None:
@@ -57,12 +63,13 @@ def show_saved_progress(
         print(f"Saved progress: {format_size(current)} downloaded.")
         return
 
-    if phase == "extracting" and download_path.is_file():
+    archive_path = cached_download_path(download_path)
+    if phase == "extracting" and archive_path.is_file():
         destination = Path(str(state["destination"])).expanduser().resolve()
         progress = extraction_progress_for_destination(state, destination)
         completed_value = progress.get("completed_members", [])
         try:
-            with zipfile.ZipFile(download_path) as archive:
+            with zipfile.ZipFile(archive_path) as archive:
                 members = archive.infolist()
                 total = sum(member.file_size for member in members if not member.is_dir())
                 completed = {
