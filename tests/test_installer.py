@@ -167,7 +167,8 @@ class SafeExtractTests(unittest.TestCase):
                         "configure_steam_shortcut",
                         return_value=(1234, root / "Steam"),
                     ) as configure_shortcut,
-                    patch.object(installer_service, "launch_steam") as launch_steam,
+                    patch.object(installer, "launch_steam") as launch_steam,
+                    patch.object(installer, "_prompt_launch_steam", return_value=True),
                     patch.object(installer, "_prompt_keep_download", return_value=True),
                     patch.object(installer, "_prompt_for_completed_action", return_value="4"),
                 ):
@@ -472,6 +473,12 @@ class SafeExtractTests(unittest.TestCase):
         with patch("builtins.input", return_value=""):
             self.assertFalse(installer_ui.prompt_keep_download())
 
+    def test_prompt_launch_steam_accepts_yes_and_defaults_to_no(self) -> None:
+        with patch("builtins.input", side_effect=("invalid", "yes")):
+            self.assertTrue(installer_ui.prompt_launch_steam())
+        with patch("builtins.input", return_value=""):
+            self.assertFalse(installer_ui.prompt_launch_steam())
+
     def test_completed_install_can_be_reinstalled_with_saved_settings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -511,6 +518,7 @@ class SafeExtractTests(unittest.TestCase):
                 patch.object(installer, "_state_directory", return_value=state_directory),
                 patch.object(installer_state, "state_directory", return_value=state_directory),
                 patch.object(installer, "load_zip_url", return_value=url),
+                patch.object(installer, "_prompt_launch_steam", return_value=False),
                 patch.object(installer, "_prompt_keep_download", return_value=False),
                 patch.object(installer, "_prompt_for_completed_action", side_effect=lambda: next(actions)),
                 patch.object(installer, "_run_install", side_effect=fake_run_install) as run_install,
@@ -894,12 +902,14 @@ class SafeExtractTests(unittest.TestCase):
                     "configure_steam_shortcut",
                     return_value=(1234, root / "Steam"),
                 ),
-                patch.object(installer_service, "launch_steam"),
+                patch.object(installer, "_prompt_launch_steam", return_value=False),
+                patch.object(installer, "launch_steam") as launch_steam,
                 patch.object(installer, "_prompt_keep_download", return_value=False),
                 patch.object(installer, "_prompt_for_completed_action", return_value="4"),
             ):
                 installer.install()
 
+            launch_steam.assert_not_called()
             self.assertEqual((destination / TEXT_FILE).read_text(encoding="utf-8"), "480")
             self.assertEqual(json.loads(state_path.read_text(encoding="utf-8"))["phase"], "complete")
             settings = json.loads((state_directory / "settings.json").read_text(encoding="utf-8"))
@@ -1090,6 +1100,43 @@ class SafeExtractTests(unittest.TestCase):
                 self.assertTrue(window._confirm_preflight(destination))
 
             ask.assert_not_called()
+
+    def test_continue_refreshes_saved_state_before_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            destination = root / "install"
+            url = "https://example.test/game.zip"
+            state_path = root / "state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "url_hash": hashlib.sha256(url.encode("utf-8")).hexdigest(),
+                        "destination": str(destination),
+                        "steam_app_id": "480",
+                        "phase": "extracting",
+                        "completed_members": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            window = object.__new__(installer_gui.InstallerWindow)
+            window.state_path = state_path
+            window.url = url
+            window.state = None
+            window.destination_var = Mock()
+            window.destination_var.get.return_value = str(destination)
+            seen_state: list[dict[str, object] | None] = []
+
+            def confirm_preflight(_: Path) -> bool:
+                seen_state.append(window.state)
+                return False
+
+            with patch.object(window, "_confirm_preflight", side_effect=confirm_preflight):
+                window._start_install()
+
+            self.assertEqual(len(seen_state), 1)
+            self.assertIsNotNone(seen_state[0])
+            self.assertEqual(seen_state[0]["phase"], "extracting")
 
     def test_unchecking_keep_download_prompts_to_delete_cached_zip(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

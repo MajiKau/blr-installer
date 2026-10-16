@@ -29,6 +29,7 @@ from .download import (
 )
 from .errors import InstallationPaused
 from .service import install_configured
+from .steam import launch_steam
 from .state import (
     keep_download_preference,
     last_destination,
@@ -481,6 +482,7 @@ class InstallerWindow:
             messagebox.showerror("Invalid install folder", str(exc), parent=self.root)
             return
         try:
+            self.state = read_job_state(self.state_path, self.url)
             continue_install = self._confirm_preflight(destination)
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
             messagebox.showerror("Could not check install folder", str(exc), parent=self.root)
@@ -526,7 +528,7 @@ class InstallerWindow:
 
         def worker() -> None:
             try:
-                install_configured(
+                steam_root = install_configured(
                     destination,
                     steam_app_id,
                     report_progress,
@@ -539,7 +541,7 @@ class InstallerWindow:
             except Exception as exc:
                 self.events.put(("error", exc))
             else:
-                self.events.put(("complete", None))
+                self.events.put(("complete", steam_root))
             finally:
                 self.events.put(("stopped", None))
 
@@ -680,6 +682,23 @@ class InstallerWindow:
                         str(exc),
                         parent=self.root,
                     )
+                if messagebox.askyesno(
+                    "Installation complete",
+                    "Installation is complete. Would you like to launch Steam now?",
+                    default=messagebox.NO,
+                    parent=self.root,
+                ):
+                    try:
+                        launch_steam(Path(payload))
+                    except (OSError, RuntimeError) as exc:
+                        self.status_var.set(
+                            "Installation complete, but Steam could not be launched."
+                        )
+                        messagebox.showerror(
+                            "Could not launch Steam",
+                            str(exc),
+                            parent=self.root,
+                        )
             elif event == "error":
                 self.progress.stop()
                 try:
@@ -688,7 +707,7 @@ class InstallerWindow:
                     self.state = None
                 if self.state is not None and self.state.get("phase") == "complete":
                     self.status_var.set(
-                        "Installation completed, but Steam could not be relaunched."
+                        "Installation completed, but Steam setup reported an error."
                     )
                     self.start_button.configure(text="Reinstall")
                     self.launch_button.state(["!disabled"])

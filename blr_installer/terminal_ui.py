@@ -136,6 +136,16 @@ def prompt_keep_download() -> bool:
         print("Please enter y or n.")
 
 
+def prompt_launch_steam() -> bool:
+    while True:
+        choice = input("Launch Steam now? [y/N]: ").strip().lower()
+        if choice in {"", "n", "no"}:
+            return False
+        if choice in {"y", "yes"}:
+            return True
+        print("Please enter y or n.")
+
+
 def launch_game(
     destination: Path,
     steam_app_id: str,

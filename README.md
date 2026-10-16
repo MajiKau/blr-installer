@@ -13,14 +13,15 @@ The installer remembers the last selected install folder. The initial folder is
 `blacklightretribution` folder, so that folder appears inside the selected
 location.
 After an install finishes, it adds or updates the BLRevive non-Steam shortcut
-in the Steam library and relaunches Steam. On Linux it also selects Proton
-Experimental for the shortcut; Proton Experimental must already be installed
-in Steam. Steam can stay open during the download and extraction. If it is still
-running when shortcut setup begins, the installer asks you to close it because
-Steam can overwrite changes to its shortcut files. If Steam has multiple user
-directories, the installer prompts you to choose which library receives the
-shortcut, using each account's display name and username where available. The
-Launch game button starts that Steam library shortcut and closes the installer.
+in the Steam library and asks whether to launch Steam. Steam is not launched
+automatically. On Linux it also selects Proton Experimental for the shortcut;
+Proton Experimental must already be installed in Steam. Steam can stay open
+during the download and extraction. If it is still running when shortcut setup
+begins, the installer asks you to close it because Steam can overwrite changes
+to its shortcut files. If Steam has multiple user directories, the installer
+prompts you to choose which library receives the shortcut, using each account's
+display name and username where available. The Launch game button starts that
+Steam library shortcut and closes the installer.
 
 If an install is interrupted, the next run shows the saved progress and lets you
 continue, change the Steam choice or install folder, or cancel while keeping the
@@ -96,8 +97,9 @@ button to install, pause, or continue an installation. Closing the GUI while an
 operation is active requests a pause and saves progress.
 
 The terminal version prompts for whether you own the game on Steam, whether to
-keep the downloaded ZIP, and for an install folder (press Enter to use the
-remembered location or the platform default above). The generated text file
+launch Steam after installation, whether to keep the downloaded ZIP, and for an
+install folder (press Enter to use the remembered location or the platform
+default above). The generated text file
 contains `209870` for “Own on Steam” or `480` for “Don't own on Steam”.
 
 Do not remove the installer's saved state directory if you want to resume an
