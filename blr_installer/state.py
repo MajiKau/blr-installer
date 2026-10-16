@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from installer_config import STEAM_OPTIONS
+from .config import STEAM_OPTIONS
 
 
 def state_directory() -> Path:

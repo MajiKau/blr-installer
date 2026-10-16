@@ -1,6 +1,6 @@
 from pathlib import Path
 import sys
-project_directory = Path(SPECPATH)
+project_directory = Path(SPECPATH).parent
 
 a = Analysis(
     [str(project_directory / "installer.py")],
@@ -8,8 +8,8 @@ a = Analysis(
     binaries=[],
     datas=[
         (str(project_directory / "config.json"), "."),
-        (str(project_directory / "icon.ico"), "."),
-        (str(project_directory / "icon.png"), ".")
+        (str(project_directory / "assets" / "icon.ico"), "assets"),
+        (str(project_directory / "assets" / "icon.png"), "assets")
     ],
     hiddenimports=['PIL._tkinter_finder'],
     hookspath=[],
@@ -38,5 +38,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="icon.ico"
+    icon=str(project_directory / "assets" / "icon.ico")
 )

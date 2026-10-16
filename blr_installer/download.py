@@ -11,9 +11,9 @@ from email.message import Message
 from pathlib import Path
 from typing import Callable, Protocol, cast
 
-from installer_config import CHUNK_SIZE
-from installer_errors import InstallationPaused
-from installer_progress import finish_progress, show_progress
+from .config import CHUNK_SIZE
+from .errors import InstallationPaused
+from .progress import finish_progress, show_progress
 
 class DownloadResponse(Protocol):
     headers: Message

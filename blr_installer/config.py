@@ -23,15 +23,16 @@ if getattr(sys, "frozen", False):
     _external_config = Path(sys.executable).resolve().parent / "config.json"
     CONFIG_FILE = _external_config if _external_config.is_file() else _bundle_directory / "config.json"
     if sys.platform == "win32":
-        ICON_FILE = _bundle_directory / "icon.ico"
+        ICON_FILE = _bundle_directory / "assets" / "icon.ico"
     else:
-        ICON_FILE = _bundle_directory / "icon.png"
+        ICON_FILE = _bundle_directory / "assets" / "icon.png"
 else:
-    CONFIG_FILE = Path(__file__).with_name("config.json")
+    _project_directory = Path(__file__).resolve().parents[1]
+    CONFIG_FILE = _project_directory / "config.json"
     if sys.platform == "win32":
-        ICON_FILE = Path(__file__).with_name("icon.ico")
+        ICON_FILE = _project_directory / "assets" / "icon.ico"
     else:
-        ICON_FILE = Path(__file__).with_name("icon.png")
+        ICON_FILE = _project_directory / "assets" / "icon.png"
 
 
 def load_config() -> dict[str, object]:

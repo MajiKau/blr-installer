@@ -12,17 +12,17 @@ from tkinter import filedialog, messagebox, simpledialog
 
 import ttkbootstrap as ttk
 
-from installer_config import ICON_FILE, STEAM_OPTIONS, load_zip_url
-from installer_download import (
+from .config import ICON_FILE, STEAM_OPTIONS, load_zip_url
+from .download import (
     discard_download_cache,
     format_size,
     metadata_path,
     read_resume_metadata,
 )
-from installer_errors import InstallationPaused
-from installer_service import install_configured
-from installer_state import last_destination, read_job_state, state_directory
-from installer_ui import launch_game
+from .errors import InstallationPaused
+from .service import install_configured
+from .state import last_destination, read_job_state, state_directory
+from .terminal_ui import launch_game
 
 
 class InstallerWindow:

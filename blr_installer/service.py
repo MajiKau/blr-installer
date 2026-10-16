@@ -6,21 +6,21 @@ import zipfile
 from pathlib import Path
 from typing import Callable
 
-from blrevive_steam_setup import (
+from .steam import (
     configure_steam_shortcut,
     launch_steam,
 )
-from installer_config import (
+from .config import (
     GAME_EXECUTABLE,
     STEAM_OPTIONS,
     TEXT_FILE,
     load_launch_args,
     load_zip_url,
 )
-from installer_download import download_zip
-from installer_extract import safe_extract
-from installer_progress import finish_progress, show_progress
-from installer_state import (
+from .download import download_zip
+from .extract import safe_extract
+from .progress import finish_progress, show_progress
+from .state import (
     atomic_write_json,
     extraction_progress_for_destination,
     read_job_state,

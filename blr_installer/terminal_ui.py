@@ -4,10 +4,10 @@ import zipfile
 from pathlib import Path
 from typing import Callable
 
-from blrevive_steam_setup import launch_steam_shortcut
-from installer_config import GAME_EXECUTABLE, STEAM_OPTIONS, TEXT_FILE
-from installer_download import format_size, metadata_path, read_resume_metadata
-from installer_state import extraction_progress_for_destination, last_destination
+from .config import GAME_EXECUTABLE, STEAM_OPTIONS, TEXT_FILE
+from .download import format_size, metadata_path, read_resume_metadata
+from .state import extraction_progress_for_destination, last_destination
+from .steam import launch_steam_shortcut
 
 
 def choose_steam_option() -> str:

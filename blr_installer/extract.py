@@ -7,8 +7,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
-from installer_config import CHUNK_SIZE
-from installer_errors import InstallationPaused
+from .config import CHUNK_SIZE
+from .errors import InstallationPaused
 
 
 def _target_for_member(root: Path, member: zipfile.ZipInfo) -> Path:

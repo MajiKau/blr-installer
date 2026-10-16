@@ -6,7 +6,7 @@ Requirements:
     python3 -m pip install vdf
 
 Example:
-    python3 blrevive_steam_setup.py \
+    python3 -m blr_installer.steam \
         --exe "$HOME/Games/BLRevive/BlacklightRetribution.exe" \
         --game-app-id 480
 
@@ -36,7 +36,7 @@ try:
 except ImportError:
     vdf = None
 
-from installer_errors import InstallationPaused
+from .errors import InstallationPaused
 
 
 APP_NAME = "BLRevive"

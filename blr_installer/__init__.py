@@ -1,0 +1,1 @@
+"""BLRevive installer application package."""

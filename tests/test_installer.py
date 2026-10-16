@@ -11,16 +11,16 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.request import Request
 
-import blrevive_steam_setup
-import installer
-import installer_download
-import installer_errors
-import installer_extract
-import installer_service
-import installer_state
-import installer_ui
-from installer_config import GAME_EXECUTABLE, TEXT_FILE
-from installer_extract import safe_extract
+from blr_installer import cli as installer
+from blr_installer import download as installer_download
+from blr_installer import errors as installer_errors
+from blr_installer import extract as installer_extract
+from blr_installer import service as installer_service
+from blr_installer import state as installer_state
+from blr_installer import steam as blrevive_steam_setup
+from blr_installer import terminal_ui as installer_ui
+from blr_installer.config import GAME_EXECUTABLE, TEXT_FILE
+from blr_installer.extract import safe_extract
 
 
 class FakeResponse:

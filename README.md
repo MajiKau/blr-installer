@@ -67,6 +67,14 @@ python -m pip install -r requirements.txt
 
 The GUI uses ttkbootstrap's built-in `pydata-dark` theme.
 
+## Run tests
+
+Run the test suite from the repository root:
+
+```powershell
+python -m unittest discover
+```
+
 The GUI has checkboxes for keeping the downloaded ZIP and using App ID 209870
  (which requires owning the game on Steam); unchecked, it
 uses App ID 480. It also allows choosing the install folder, shows download and
@@ -83,10 +91,10 @@ Do not remove the installer's saved state directory if you want to resume an
 interrupted installation. It stores a hash of the ZIP URL and the server's
 validators, not the URL itself.
 
-The installer code is split by responsibility: configuration, download/resume,
-ZIP extraction, saved state, terminal progress, and user prompts/game launching
-are in separate `installer_*.py` modules. `installer.py` remains the entry point
-and installation coordinator.
+The application code lives in the `blr_installer/` package, grouped by
+responsibility. `installer.py` remains a small root-level launcher. Automated
+tests are in `tests/`, icons are in `assets/`, and the PyInstaller spec is in
+`packaging/`.
 
 ## Build a single executable
 
