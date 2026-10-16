@@ -17,6 +17,7 @@ from blr_installer import download as installer_download
 from blr_installer import errors as installer_errors
 from blr_installer import extract as installer_extract
 from blr_installer import gui as installer_gui
+from blr_installer import prerequisites as installer_prerequisites
 from blr_installer import service as installer_service
 from blr_installer import state as installer_state
 from blr_installer import steam as blrevive_steam_setup
@@ -74,6 +75,92 @@ class SafeExtractTests(unittest.TestCase):
                 self.assertEqual(
                     installer_state.default_destination(),
                     Path("/home/test/Games"),
+                )
+
+    def test_windows_prerequisites_extract_and_install_all_components(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assets = Path(temp_dir) / "assets"
+            assets.mkdir()
+            for name in (
+                "directx_Jun2010_redist.exe",
+                "vcredist_2010_x86.exe",
+                "vcredist_2012_x86.exe",
+            ):
+                (assets / name).write_bytes(b"installer")
+            progress: list[str] = []
+
+            def extract_directx(command: list[str], **_: object) -> Mock:
+                extraction_directory = Path(command[2].removeprefix("/T:"))
+                (extraction_directory / "DXSETUP.exe").write_bytes(b"setup")
+                return Mock(returncode=0)
+
+            with (
+                patch.object(installer_prerequisites.sys, "platform", "win32"),
+                patch.object(
+                    installer_prerequisites,
+                    "prerequisite_assets_directory",
+                    return_value=assets,
+                ),
+                patch.object(
+                    installer_prerequisites.subprocess,
+                    "run",
+                    side_effect=extract_directx,
+                ) as extract,
+                patch.object(
+                    installer_prerequisites,
+                    "_run_elevated",
+                    side_effect=(0, 3010, 0),
+                ) as run_elevated,
+            ):
+                results = installer_prerequisites.install_windows_prerequisites(
+                    progress.append
+                )
+
+            self.assertEqual(extract.call_args.args[0][1], "/Q")
+            self.assertEqual(run_elevated.call_count, 3)
+            self.assertEqual(run_elevated.call_args_list[0].args[1], ["/silent"])
+            self.assertEqual(
+                run_elevated.call_args_list[1].args[1],
+                ["/q", "/norestart"],
+            )
+            self.assertEqual(
+                run_elevated.call_args_list[2].args[1],
+                ["/install", "/quiet", "/norestart"],
+            )
+            self.assertEqual(len(results), 3)
+            self.assertTrue(results[1].reboot_required)
+            self.assertEqual(len(progress), 3)
+
+    def test_windows_prerequisite_setup_handles_already_installed_code(self) -> None:
+        with patch.object(
+            installer_prerequisites,
+            "_run_elevated",
+            return_value=1638,
+        ):
+            result = installer_prerequisites._run_setup(
+                "Visual C++",
+                Path("vcredist.exe"),
+                ["/quiet"],
+                already_installed_codes=(1638,),
+            )
+
+        self.assertIn("different version", result.status)
+        self.assertFalse(result.reboot_required)
+
+    def test_windows_prerequisite_setup_reports_failure_code(self) -> None:
+        with patch.object(
+            installer_prerequisites,
+            "_run_elevated",
+            return_value=2,
+        ):
+            with self.assertRaisesRegex(
+                installer_prerequisites.PrerequisiteInstallError,
+                "exit code 2",
+            ):
+                installer_prerequisites._run_setup(
+                    "Visual C++",
+                    Path("vcredist.exe"),
+                    ["/quiet"],
                 )
 
     def test_extracts_files(self) -> None:

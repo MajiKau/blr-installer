@@ -43,6 +43,14 @@ asks whether to delete an existing cached ZIP now or keep it for the next
 reinstall. If unchecked during an interrupted installation, the ZIP remains
 available for resuming and is removed after installation completes.
 
+On Windows, after the game installation is complete, the GUI offers a separate
+“Install Windows prerequisites” action for DirectX June 2010 and the Microsoft
+Visual C++ 2010 and 2012 x86 runtimes. Each setup requests administrator
+approval through Windows UAC. The installer reports setup failures and whether
+Windows needs to restart, but never restarts automatically. These redistributable
+installers are bundled into the Windows executable, increasing its size by
+about 116 MB; they are not bundled into Linux builds.
+
 ## Configure
 
 Edit `config.json` and set `zip_url` to the HTTPS or HTTP URL of the ZIP file:

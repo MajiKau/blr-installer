@@ -1,16 +1,34 @@
 from pathlib import Path
 import sys
 project_directory = Path(SPECPATH).parent
+datas = [
+    (str(project_directory / "config.json"), "."),
+    (str(project_directory / "assets" / "icon.ico"), "assets"),
+    (str(project_directory / "assets" / "icon.png"), "assets"),
+]
+if sys.platform == "win32":
+    datas.extend(
+        [
+            (
+                str(project_directory / "assets" / "directx_Jun2010_redist.exe"),
+                "assets",
+            ),
+            (
+                str(project_directory / "assets" / "vcredist_2010_x86.exe"),
+                "assets",
+            ),
+            (
+                str(project_directory / "assets" / "vcredist_2012_x86.exe"),
+                "assets",
+            ),
+        ]
+    )
 
 a = Analysis(
     [str(project_directory / "installer.py")],
     pathex=[str(project_directory)],
     binaries=[],
-    datas=[
-        (str(project_directory / "config.json"), "."),
-        (str(project_directory / "assets" / "icon.ico"), "assets"),
-        (str(project_directory / "assets" / "icon.png"), "assets")
-    ],
+    datas=datas,
     hiddenimports=['PIL._tkinter_finder'],
     hookspath=[],
     hooksconfig={},
