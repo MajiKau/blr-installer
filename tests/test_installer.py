@@ -409,6 +409,53 @@ class SafeExtractTests(unittest.TestCase):
                 cwd=root,
             )
 
+    def test_launch_steam_uses_regular_launcher_for_path_containing_flatpak_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "com.valvesoftware.Steam" / "custom" / "Steam"
+            root.mkdir(parents=True)
+            steam_launcher = root / "steam"
+            steam_launcher.write_bytes(b"steam")
+
+            with (
+                patch.object(blrevive_steam_setup.sys, "platform", "linux"),
+                patch.object(blrevive_steam_setup.subprocess, "Popen") as popen,
+                patch.object(blrevive_steam_setup.shutil, "which") as which,
+            ):
+                blrevive_steam_setup.launch_steam(root)
+
+            which.assert_not_called()
+            popen.assert_called_once_with([str(steam_launcher)], cwd=root)
+
+    def test_launch_steam_uses_flatpak_for_standard_flatpak_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = (
+                Path(temp_dir)
+                / ".var"
+                / "app"
+                / "com.valvesoftware.Steam"
+                / ".local"
+                / "share"
+                / "Steam"
+            )
+            root.mkdir(parents=True)
+            flatpak = Path(temp_dir) / "flatpak"
+
+            with (
+                patch.object(blrevive_steam_setup.sys, "platform", "linux"),
+                patch.object(blrevive_steam_setup.shutil, "which", return_value=str(flatpak)),
+                patch.object(blrevive_steam_setup.subprocess, "Popen") as popen,
+            ):
+                blrevive_steam_setup.launch_steam(root, shortcut_id=123)
+
+            popen.assert_called_once_with(
+                [
+                    str(flatpak),
+                    "run",
+                    "com.valvesoftware.Steam",
+                    "steam://rungameid/123",
+                ]
+            )
+
     def test_steam_close_check_prompts_only_when_steam_is_running(self) -> None:
         with patch.object(
             blrevive_steam_setup, "steam_appears_running", side_effect=(False, True, False)
@@ -420,6 +467,32 @@ class SafeExtractTests(unittest.TestCase):
 
         prompt.assert_called_once_with()
         self.assertEqual(running_check.call_count, 3)
+
+    def test_linux_process_check_matches_steam_and_exact_flatpak_argv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            proc = Path(temp_dir)
+            native = proc / "101"
+            native.mkdir()
+            (native / "comm").write_text("steam\n", encoding="utf-8")
+            (native / "cmdline").write_bytes(b"/usr/bin/steam\x00")
+            self.assertTrue(blrevive_steam_setup._linux_steam_appears_running(proc))
+
+            (native / "comm").write_text("flatpak\n", encoding="utf-8")
+            (native / "cmdline").write_bytes(
+                b"/usr/bin/flatpak\x00--user\x00run\x00com.valvesoftware.Steam\x00"
+            )
+            self.assertTrue(blrevive_steam_setup._linux_steam_appears_running(proc))
+
+            (native / "cmdline").write_bytes(
+                b"/usr/bin/other\x00--app=com.valvesoftware.Steam\x00"
+            )
+            self.assertFalse(blrevive_steam_setup._linux_steam_appears_running(proc))
+
+    def test_linux_process_check_fails_if_proc_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_proc = Path(temp_dir) / "proc"
+            with self.assertRaisesRegex(RuntimeError, "Cannot check whether Steam is running"):
+                blrevive_steam_setup._linux_steam_appears_running(missing_proc)
 
     def test_steam_close_prompt_can_pause_install(self) -> None:
         with (

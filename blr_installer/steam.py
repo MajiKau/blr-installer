@@ -125,6 +125,47 @@ def steam_roots() -> list[Path]:
     return found
 
 
+def _process_is_steam(comm: str, cmdline: bytes) -> bool:
+    if comm.strip().lower() in {"steam", "steam.exe"}:
+        return True
+
+    arguments = [
+        argument.decode(errors="ignore").lower()
+        for argument in cmdline.split(b"\x00")
+        if argument
+    ]
+    if not arguments or Path(arguments[0]).name != "flatpak":
+        return False
+    return any(
+        arguments[index : index + 2] == ["run", "com.valvesoftware.steam"]
+        for index in range(len(arguments) - 1)
+    )
+
+
+def _linux_steam_appears_running(proc: Path) -> bool:
+    if not proc.is_dir():
+        raise RuntimeError(f"Cannot check whether Steam is running: {proc} is unavailable.")
+    try:
+        entries = list(proc.iterdir())
+    except OSError as exc:
+        raise RuntimeError(f"Could not inspect process directory {proc}: {exc}") from exc
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            comm = (entry / "comm").read_text(errors="ignore")
+            cmdline = (entry / "cmdline").read_bytes()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise RuntimeError(
+                f"Could not inspect process {entry.name} while checking whether Steam is running: {exc}"
+            ) from exc
+        if _process_is_steam(comm, cmdline):
+            return True
+    return False
+
+
 def steam_appears_running() -> bool:
     """Check whether Steam is running before editing files it may overwrite."""
     if sys.platform == "win32":
@@ -141,26 +182,9 @@ def steam_appears_running() -> bool:
             row and row[0].lower() == "steam.exe"
             for row in csv.reader(io.StringIO(result.stdout))
         )
-
-    proc = Path("/proc")
-    if not proc.is_dir():
-        return False
-    for entry in proc.iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            comm = (entry / "comm").read_text(errors="ignore").strip().lower()
-            cmdline = (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode(
-                errors="ignore"
-            ).lower()
-        except (OSError, PermissionError):
-            continue
-        if comm in {"steam", "steam.exe"}:
-            return True
-        # Catches common Flatpak launch processes. Avoid matching this script itself.
-        if "com.valvesoftware.steam" in cmdline and "blrevive_steam_setup.py" not in cmdline:
-            return True
-    return False
+    if not sys.platform.startswith("linux"):
+        raise RuntimeError(f"Steam process detection is not supported on {sys.platform}.")
+    return _linux_steam_appears_running(Path("/proc"))
 
 
 def ensure_steam_closed(
@@ -597,12 +621,21 @@ def launch_steam(steam_root: Path, shortcut_id: int | None = None) -> None:
     uri_args = (
         [f"steam://rungameid/{shortcut_id}"] if shortcut_id is not None else []
     )
+    flatpak_root_parts = (
+        ".var",
+        "app",
+        "com.valvesoftware.Steam",
+        ".local",
+        "share",
+        "Steam",
+    )
+    is_flatpak_root = steam_root.parts[-len(flatpak_root_parts) :] == flatpak_root_parts
     if sys.platform == "win32":
         steam_exe = steam_root / "steam.exe"
         if not steam_exe.is_file():
             raise RuntimeError(f"Steam executable not found: {steam_exe}")
         subprocess.Popen([str(steam_exe), *uri_args], cwd=steam_root)
-    elif "com.valvesoftware.Steam" in str(steam_root):
+    elif is_flatpak_root:
         flatpak = shutil.which("flatpak")
         if flatpak is None:
             raise RuntimeError("Flatpak is required to launch this Steam installation.")
