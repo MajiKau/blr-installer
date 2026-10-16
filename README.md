@@ -8,6 +8,9 @@ The terminal displays progress for downloading and extracting. Progress and
 installation settings are saved in the user's application state directory
 (`%LOCALAPPDATA%\BLRevive\installer` on Windows or
 `~/.local/state/BLRevive/installer` on Linux, unless `XDG_STATE_HOME` is set).
+HTTPS downloads validate certificates against the bundled `certifi` CA bundle,
+so public certificates do not depend on the Windows root store being up to
+date. Private roots used by TLS inspection still need to be trusted separately.
 The installer remembers the last selected install folder. The initial folder is
 `%LOCALAPPDATA%\BLRevive` on Windows and `~/Games` on Linux. The ZIP contains a
 `blacklightretribution` folder, so that folder appears inside the selected

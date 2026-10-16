@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import queue
 import shutil
 import sys
@@ -38,6 +39,9 @@ from .state import (
     state_directory,
 )
 from .terminal_ui import launch_game
+
+
+PROGRESS_RATE_SAMPLE_INTERVAL = 0.5
 
 
 class InstallerWindow:
@@ -561,7 +565,7 @@ class InstallerWindow:
         if self.progress_sample_time is not None:
             elapsed = now - self.progress_sample_time
             transferred = current - self.progress_sample_bytes
-            if elapsed > 0 and transferred > 0:
+            if elapsed >= PROGRESS_RATE_SAMPLE_INTERVAL and transferred > 0:
                 sample_rate = transferred / elapsed
                 self.progress_rate = (
                     sample_rate
@@ -620,8 +624,9 @@ class InstallerWindow:
                 if rate is not None:
                     progress_text += f" | {format_size(int(rate))}/s"
                     if total is not None and total > current:
+                        eta_seconds = math.ceil((total - current) / rate)
                         progress_text += (
-                            f" | about {self._format_eta(int((total - current) / rate))} left"
+                            f" | about {self._format_eta(eta_seconds)} left"
                         )
                 self.status_var.set(progress_text)
             elif event == "steam_prompt":

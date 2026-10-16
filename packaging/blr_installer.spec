@@ -25,7 +25,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="BLReviveInstallerV1_" + ('Windows' if sys.platform == 'win32' else 'Linux'),
+    name="BLReviveInstaller_" + ('Windows' if sys.platform == 'win32' else 'Linux') + "_V1_0_0",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

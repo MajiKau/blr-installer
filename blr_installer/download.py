@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import ssl
 import threading
 import urllib.error
 import urllib.request
@@ -11,9 +12,13 @@ from email.message import Message
 from pathlib import Path
 from typing import Callable, Protocol, cast
 
+import certifi
+
 from .config import CHUNK_SIZE
 from .errors import InstallationPaused
 from .progress import finish_progress, show_progress
+
+SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 class DownloadResponse(Protocol):
     headers: Message
@@ -181,7 +186,10 @@ def download_zip(
     request = _make_download_request(url, offset, validator)
 
     try:
-        response = cast(DownloadResponse, urllib.request.urlopen(request, timeout=60))
+        response = cast(
+            DownloadResponse,
+            urllib.request.urlopen(request, timeout=60, context=SSL_CONTEXT),
+        )
     except urllib.error.HTTPError as exc:
         if exc.code != 416:
             raise
@@ -198,7 +206,11 @@ def download_zip(
         offset = 0
         response = cast(
             DownloadResponse,
-            urllib.request.urlopen(_make_download_request(url), timeout=60),
+            urllib.request.urlopen(
+                _make_download_request(url),
+                timeout=60,
+                context=SSL_CONTEXT,
+            ),
         )
 
     with response:
@@ -223,7 +235,11 @@ def download_zip(
             metadata = {"url_hash": url_hash}
             response = cast(
                 DownloadResponse,
-                urllib.request.urlopen(_make_download_request(url), timeout=60),
+                urllib.request.urlopen(
+                    _make_download_request(url),
+                    timeout=60,
+                    context=SSL_CONTEXT,
+                ),
             )
             with response:
                 _write_download_response(

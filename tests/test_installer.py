@@ -636,6 +636,10 @@ class SafeExtractTests(unittest.TestCase):
 
             request = urlopen.call_args.args[0]
             self.assertIsInstance(request, Request)
+            self.assertIs(
+                urlopen.call_args.kwargs["context"],
+                installer_download.SSL_CONTEXT,
+            )
             self.assertEqual(request.get_header("Range"), "bytes=3-")
             self.assertEqual(request.get_header("If-range"), '"version-1"')
             self.assertEqual(download_path.read_bytes(), b"abcdef")
@@ -1002,6 +1006,43 @@ class SafeExtractTests(unittest.TestCase):
 
         self.assertEqual(window._format_eta(65), "1m 5s")
         self.assertEqual(window._format_eta(3661), "1h 1m")
+
+    def test_gui_progress_rate_ignores_bursts_within_sample_interval(self) -> None:
+        window = object.__new__(installer_gui.InstallerWindow)
+        window.progress_stage = None
+        window.progress_sample_time = None
+        window.progress_sample_bytes = 0
+        window.progress_rate = None
+
+        with patch.object(
+            installer_gui.time,
+            "monotonic",
+            side_effect=(1.0, 1.1, 1.1, 1.5),
+        ):
+            self.assertIsNone(window._update_progress_rate("Extract", 0))
+            self.assertIsNone(window._update_progress_rate("Extract", 100_000))
+            self.assertIsNone(window._update_progress_rate("Extract", 200_000))
+            self.assertEqual(
+                window._update_progress_rate("Extract", 1_000_000),
+                2_000_000,
+            )
+
+    def test_gui_progress_eta_rounds_up_to_at_least_one_second(self) -> None:
+        window = object.__new__(installer_gui.InstallerWindow)
+        window.events = installer_gui.queue.Queue()
+        window.events.put(("progress", ("Extract", 99, 100)))
+        window.progress_stage = "Extract"
+        window.progress_sample_time = 10.0
+        window.progress_sample_bytes = 0
+        window.progress_rate = 1_000
+        window.progress = Mock()
+        window.status_var = Mock()
+        window.worker = None
+
+        with patch.object(installer_gui.time, "monotonic", return_value=10.1):
+            window._poll_events()
+
+        self.assertIn("about 1s left", window.status_var.set.call_args.args[0])
 
     def test_gui_preflight_warns_about_existing_install_and_low_space(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
