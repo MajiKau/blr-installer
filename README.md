@@ -6,7 +6,7 @@ This interactive installer downloads a ZIP file, extracts it into the selected
 folder, and writes the selected Steam app ID to
 `blacklightretribution/Binaries/Win32/steam_appid.txt` inside that folder.
 
-The terminal displays progress for downloading and extracting. Progress and
+The installer displays progress for downloading and extracting. Progress and
 installation settings are saved in the user's application state directory
 (`%LOCALAPPDATA%\BLRevive\installer` on Windows or
 `~/.local/state/BLRevive/installer` on Linux, unless `XDG_STATE_HOME` is set).
@@ -19,8 +19,8 @@ The installer remembers the last selected install folder. The initial folder is
 location.
 After an install finishes, it adds or updates the BLRevive non-Steam shortcut
 in the Steam library and asks whether to launch Steam. Steam is not launched
-automatically. On Linux it also selects Proton Experimental for the shortcut;
-Proton Experimental must already be installed in Steam. Steam can stay open
+automatically. On Linux it also selects Proton Experimental for the shortcut; 
+Steam can stay open
 during the download and extraction. If it is still running when shortcut setup
 begins, the installer asks you to close it because Steam can overwrite changes
 to its shortcut files. If Steam has multiple user directories, the installer
@@ -31,8 +31,7 @@ Steam library shortcut and closes the installer.
 If an install is interrupted, the next run shows the saved progress and lets you
 continue, change the Steam choice or install folder, or cancel while keeping the
 saved progress. Downloads resume when the server supports HTTP range requests;
-otherwise, they restart from the beginning. During extraction, Ctrl+C pauses at
-the current file chunk. Completed files and the current file offset are saved,
+otherwise, they restart from the beginning. During extraction completed files and the current file offset are saved,
 so extraction can resume without re-extracting completed data. Changing the
 install folder resets extraction progress for that folder while retaining the
 downloaded ZIP for resuming that install. Incomplete downloads use a `.zip.part`
@@ -50,10 +49,23 @@ DirectX June 2010 and Microsoft Visual C++ 2010 and 2012 x86 runtime DLLs. It
 prompts to install only missing prerequisites; declining continues installation
 without them. Each setup requests administrator approval through Windows UAC.
 The installer reports setup failures and whether Windows needs to restart, but
-never restarts automatically. The progress bar animates while a prerequisite is
-being installed. These redistributable installers are bundled into the Windows
+never restarts automatically. These redistributable installers are bundled into the Windows
 executable, increasing its size by about 116 MB; they are not bundled into Linux
 builds.
+
+The GUI has a checkbox for keeping the downloaded ZIP and a checkbox for having
+Steam recognize the game as Blacklight: Retribution (requires owning the game on
+Steam). When unchecked, it uses App ID 480. Before installation it reports
+available space and warns about an existing game folder. Configured size
+estimates are used until a complete ZIP is available. Download and extraction
+progress includes a transfer rate and estimated time remaining when those can be
+calculated. The GUI also allows choosing the install folder and uses one action
+button to install, pause, or continue an installation. Closing the GUI while an
+operation is active requests a pause and saves progress.
+
+Do not remove the installer's saved state directory if you want to resume an
+interrupted installation. It stores a hash of the ZIP URL and the server's
+validators, not the URL itself.
 
 ## Configure
 
@@ -61,7 +73,7 @@ Edit `config.json` and set `zip_url` to the HTTPS or HTTP URL of the ZIP file:
 
 ```json
 {
-  "zip_url": "https://example.com/download.zip",
+  "zip_url": "https://ddd-cloud.com/blrzip",
   "zip_size_gib": 5.6,
   "uncompressed_size_gib": 6.6,
   "launch_args": [
@@ -93,6 +105,17 @@ python -m pip install -r requirements.txt
 
 The GUI uses ttkbootstrap's built-in `bootstrap-dark` theme.
 
+The terminal version prompts for whether you own the game on Steam, whether to
+launch Steam after installation, whether to keep the downloaded ZIP, and for an
+install folder (press Enter to use the remembered location or the platform
+default above). The generated text file
+contains `209870` for “Own on Steam” or `480` for “Don't own on Steam”.
+
+The application code lives in the `blr_installer/` package, grouped by
+responsibility. `installer.py` remains a small root-level launcher. Automated
+tests are in `tests/`, icons are in `assets/`, and the PyInstaller spec is in
+`packaging/`.
+
 ## Run tests
 
 Run the test suite from the repository root:
@@ -100,31 +123,6 @@ Run the test suite from the repository root:
 ```powershell
 python -m unittest discover
 ```
-
-The GUI has a checkbox for keeping the downloaded ZIP and a checkbox for having
-Steam recognize the game as Blacklight: Retribution (requires owning the game on
-Steam). When unchecked, it uses App ID 480. Before installation it reports
-available space and warns about an existing game folder. Configured size
-estimates are used until a complete ZIP is available. Download and extraction
-progress includes a transfer rate and estimated time remaining when those can be
-calculated. The GUI also allows choosing the install folder and uses one action
-button to install, pause, or continue an installation. Closing the GUI while an
-operation is active requests a pause and saves progress.
-
-The terminal version prompts for whether you own the game on Steam, whether to
-launch Steam after installation, whether to keep the downloaded ZIP, and for an
-install folder (press Enter to use the remembered location or the platform
-default above). The generated text file
-contains `209870` for “Own on Steam” or `480` for “Don't own on Steam”.
-
-Do not remove the installer's saved state directory if you want to resume an
-interrupted installation. It stores a hash of the ZIP URL and the server's
-validators, not the URL itself.
-
-The application code lives in the `blr_installer/` package, grouped by
-responsibility. `installer.py` remains a small root-level launcher. Automated
-tests are in `tests/`, icons are in `assets/`, and the PyInstaller spec is in
-`packaging/`.
 
 ## Build a single executable
 
