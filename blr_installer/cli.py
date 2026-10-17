@@ -26,6 +26,7 @@ from .terminal_ui import (
     prompt_for_completed_action as _prompt_for_completed_action,
     prompt_keep_download as _prompt_keep_download,
     prompt_for_pending_action as _prompt_for_pending_action,
+    prompt_install_prerequisites as _prompt_install_prerequisites,
     prompt_launch_steam as _prompt_launch_steam,
     show_saved_progress as _show_saved_progress,
 )
@@ -96,7 +97,13 @@ def install() -> None:
         }
 
     while True:
-        steam_root = _run_install(url, state_path, download_path, state)
+        steam_root = _run_install(
+            url,
+            state_path,
+            download_path,
+            state,
+            on_prerequisites_prompt=_prompt_install_prerequisites,
+        )
         if _prompt_launch_steam():
             launch_steam(steam_root)
         if _prompt_keep_download():

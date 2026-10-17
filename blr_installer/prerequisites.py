@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,17 @@ class PrerequisiteInstallError(RuntimeError):
     pass
 
 
+DIRECTX_NAME = "DirectX June 2010"
+VC2010_NAME = "Microsoft Visual C++ 2010 (x86)"
+VC2012_NAME = "Microsoft Visual C++ 2012 (x86)"
+
+PREREQUISITE_DLLS = {
+    DIRECTX_NAME: ("d3dx9_43.dll",),
+    VC2010_NAME: ("MSVCP100.dll", "MSVCR100.dll"),
+    VC2012_NAME: ("MSVCP110.dll", "MSVCR110.dll"),
+}
+
+
 def prerequisite_assets_directory() -> Path:
     if getattr(sys, "frozen", False):
         bundle_directory = Path(
@@ -27,6 +39,26 @@ def prerequisite_assets_directory() -> Path:
         )
         return bundle_directory / "assets"
     return Path(__file__).resolve().parents[1] / "assets"
+
+
+def _x86_system_directory() -> Path:
+    windows_directory = os.environ.get("WINDIR")
+    if not windows_directory:
+        raise RuntimeError("Could not locate the Windows directory from WINDIR.")
+    windows_path = Path(windows_directory)
+    wow64_directory = windows_path / "SysWOW64"
+    return wow64_directory if wow64_directory.is_dir() else windows_path / "System32"
+
+
+def missing_windows_prerequisites() -> list[str]:
+    if sys.platform != "win32":
+        return []
+    system_directory = _x86_system_directory()
+    return [
+        name
+        for name, dlls in PREREQUISITE_DLLS.items()
+        if not all((system_directory / dll).is_file() for dll in dlls)
+    ]
 
 
 def _run_elevated(executable: Path, arguments: list[str]) -> int:
@@ -150,48 +182,53 @@ def _extract_directx(redist: Path, destination: Path) -> Path:
 
 
 def install_windows_prerequisites(
+    missing: list[str],
     on_progress: Callable[[str], None] | None = None,
 ) -> list[PrerequisiteResult]:
     if sys.platform != "win32":
         raise RuntimeError("Windows prerequisites can only be installed on Windows.")
+    unknown = set(missing) - PREREQUISITE_DLLS.keys()
+    if unknown:
+        raise ValueError(f"Unknown Windows prerequisite(s): {', '.join(sorted(unknown))}")
+    if not missing:
+        return []
 
     assets = prerequisite_assets_directory()
     directx_redist = assets / "directx_Jun2010_redist.exe"
     vc2010_redist = assets / "vcredist_2010_x86.exe"
     vc2012_redist = assets / "vcredist_2012_x86.exe"
-    for installer in (directx_redist, vc2010_redist, vc2012_redist):
+    installers = {
+        DIRECTX_NAME: directx_redist,
+        VC2010_NAME: vc2010_redist,
+        VC2012_NAME: vc2012_redist,
+    }
+    for name in missing:
+        installer = installers[name]
         if not installer.is_file():
             raise FileNotFoundError(f"Bundled prerequisite installer not found: {installer}")
 
     results: list[PrerequisiteResult] = []
-    with tempfile.TemporaryDirectory(prefix="blr-directx-") as temp_dir:
-        if on_progress is not None:
-            on_progress("Installing DirectX June 2010...")
-        directx_setup = _extract_directx(directx_redist, Path(temp_dir))
-        results.append(
-            _run_setup(
-                "DirectX June 2010",
-                directx_setup,
-                ["/silent"],
-            )
-        )
-
-    for name, installer, arguments, already_installed_codes in (
-        (
-            "Microsoft Visual C++ 2010 (x86)",
-            vc2010_redist,
-            ["/q", "/norestart"],
-            (1638,),
-        ),
-        (
-            "Microsoft Visual C++ 2012 (x86)",
-            vc2012_redist,
-            ["/install", "/quiet", "/norestart"],
-            (1638,),
-        ),
-    ):
+    for name in missing:
         if on_progress is not None:
             on_progress(f"Installing {name}...")
-        results.append(_run_setup(name, installer, arguments, already_installed_codes))
+        if name == DIRECTX_NAME:
+            with tempfile.TemporaryDirectory(prefix="blr-directx-") as temp_dir:
+                directx_setup = _extract_directx(directx_redist, Path(temp_dir))
+                results.append(
+                    _run_setup(name, directx_setup, ["/silent"])
+                )
+        elif name == VC2010_NAME:
+            results.append(
+                _run_setup(name, vc2010_redist, ["/q", "/norestart"], (1638,))
+            )
+        else:
+            results.append(
+                _run_setup(
+                    name,
+                    vc2012_redist,
+                    ["/install", "/quiet", "/norestart"],
+                    (1638,),
+                )
+            )
 
     return results

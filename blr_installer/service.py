@@ -18,6 +18,11 @@ from .config import (
 )
 from .download import cached_download_path, download_zip, normalize_cached_download
 from .extract import safe_extract
+from .prerequisites import (
+    PrerequisiteResult,
+    install_windows_prerequisites,
+    missing_windows_prerequisites,
+)
 from .progress import finish_progress, show_progress
 from .state import (
     atomic_write_json,
@@ -38,6 +43,8 @@ def run_install(
     pause_event: threading.Event | None = None,
     on_steam_prompt: Callable[[], bool] | None = None,
     on_choose_steam_user: Callable[[list[tuple[Path, str]]], Path | None] | None = None,
+    on_prerequisites_prompt: Callable[[list[str]], bool] | None = None,
+    on_prerequisites_result: Callable[[list[PrerequisiteResult]], None] | None = None,
 ) -> Path:
     destination = Path(str(state["destination"])).expanduser().resolve()
     steam_app_id = str(state["steam_app_id"])
@@ -80,6 +87,26 @@ def run_install(
     text_file.parent.mkdir(parents=True, exist_ok=True)
     text_file.write_text(steam_app_id, encoding="utf-8")
 
+    missing_prerequisites = missing_windows_prerequisites()
+    if missing_prerequisites and on_prerequisites_prompt is not None:
+        if on_prerequisites_prompt(missing_prerequisites):
+
+            def report_prerequisite_progress(message: str) -> None:
+                if on_progress is not None:
+                    on_progress("Prerequisites: " + message, 0, None)
+
+            results = install_windows_prerequisites(
+                missing_prerequisites,
+                report_prerequisite_progress,
+            )
+            if on_prerequisites_result is not None:
+                on_prerequisites_result(results)
+            else:
+                for result in results:
+                    print(f"{result.name}: {result.status}")
+                if any(result.reboot_required for result in results):
+                    print("Restart Windows before launching the game.")
+
     if on_progress is not None:
         on_progress("Steam setup", 0, None)
     _, steam_root = configure_steam_shortcut(
@@ -107,6 +134,8 @@ def install_configured(
     pause_event: threading.Event,
     on_steam_prompt: Callable[[], bool] | None = None,
     on_choose_steam_user: Callable[[list[tuple[Path, str]]], Path | None] | None = None,
+    on_prerequisites_prompt: Callable[[list[str]], bool] | None = None,
+    on_prerequisites_result: Callable[[list[PrerequisiteResult]], None] | None = None,
 ) -> Path:
     if steam_app_id not in {value for _, value in STEAM_OPTIONS.values()}:
         raise ValueError("Choose a valid Steam ownership option.")
@@ -153,4 +182,6 @@ def install_configured(
         pause_event,
         on_steam_prompt,
         on_choose_steam_user,
+        on_prerequisites_prompt,
+        on_prerequisites_result,
     )

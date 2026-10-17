@@ -113,7 +113,8 @@ class SafeExtractTests(unittest.TestCase):
                 ) as run_elevated,
             ):
                 results = installer_prerequisites.install_windows_prerequisites(
-                    progress.append
+                    list(installer_prerequisites.PREREQUISITE_DLLS),
+                    progress.append,
                 )
 
             self.assertEqual(extract.call_args.args[0][1], "/Q")
@@ -130,6 +131,44 @@ class SafeExtractTests(unittest.TestCase):
             self.assertEqual(len(results), 3)
             self.assertTrue(results[1].reboot_required)
             self.assertEqual(len(progress), 3)
+
+    def test_missing_windows_prerequisites_checks_x86_runtime_dlls(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            windows_directory = Path(temp_dir) / "Windows"
+            system_directory = windows_directory / "SysWOW64"
+            system_directory.mkdir(parents=True)
+            with (
+                patch.object(installer_prerequisites.sys, "platform", "win32"),
+                patch.dict(
+                    installer_prerequisites.os.environ,
+                    {"WINDIR": str(windows_directory)},
+                    clear=True,
+                ),
+            ):
+                self.assertEqual(
+                    installer_prerequisites.missing_windows_prerequisites(),
+                    list(installer_prerequisites.PREREQUISITE_DLLS),
+                )
+                for dll in (
+                    "d3dx9_43.dll",
+                    "MSVCP100.dll",
+                    "MSVCR100.dll",
+                    "MSVCP110.dll",
+                    "MSVCR110.dll",
+                ):
+                    (system_directory / dll).write_bytes(b"runtime")
+
+                self.assertEqual(
+                    installer_prerequisites.missing_windows_prerequisites(),
+                    [],
+                )
+
+    def test_linux_has_no_windows_prerequisites(self) -> None:
+        with patch.object(installer_prerequisites.sys, "platform", "linux"):
+            self.assertEqual(
+                installer_prerequisites.missing_windows_prerequisites(),
+                [],
+            )
 
     def test_windows_prerequisite_setup_handles_already_installed_code(self) -> None:
         with patch.object(
@@ -234,6 +273,7 @@ class SafeExtractTests(unittest.TestCase):
             with self.subTest(app_id=app_id), tempfile.TemporaryDirectory() as temp_dir:
                 root = Path(temp_dir)
                 destination = root / "install"
+                setup_order: list[str] = []
 
                 def create_test_zip(_: str, download_path: Path, *_args: object) -> Path:
                     with zipfile.ZipFile(download_path, "w") as archive:
@@ -241,6 +281,14 @@ class SafeExtractTests(unittest.TestCase):
                     completed_path = download_path.with_suffix("")
                     download_path.replace(completed_path)
                     return completed_path
+
+                def configure_shortcut(*args: object) -> tuple[int, Path]:
+                    setup_order.append("steam")
+                    return 1234, root / "Steam"
+
+                def install_prerequisites(*_args: object) -> list[object]:
+                    setup_order.append("prerequisites")
+                    return []
 
                 with (
                     patch.object(installer, "_state_directory", return_value=root / "state"),
@@ -251,10 +299,25 @@ class SafeExtractTests(unittest.TestCase):
                     patch.object(installer_service, "download_zip", side_effect=create_test_zip),
                     patch.object(
                         installer_service,
+                        "missing_windows_prerequisites",
+                        return_value=[installer_prerequisites.VC2010_NAME],
+                    ),
+                    patch.object(
+                        installer_service,
+                        "install_windows_prerequisites",
+                        side_effect=install_prerequisites,
+                    ) as install_redists,
+                    patch.object(
+                        installer_service,
                         "configure_steam_shortcut",
-                        return_value=(1234, root / "Steam"),
+                        side_effect=configure_shortcut,
                     ) as configure_shortcut,
                     patch.object(installer, "launch_steam") as launch_steam,
+                    patch.object(
+                        installer,
+                        "_prompt_install_prerequisites",
+                        return_value=True,
+                    ) as prerequisite_prompt,
                     patch.object(installer, "_prompt_launch_steam", return_value=True),
                     patch.object(installer, "_prompt_keep_download", return_value=True),
                     patch.object(installer, "_prompt_for_completed_action", return_value="4"),
@@ -265,6 +328,16 @@ class SafeExtractTests(unittest.TestCase):
                     configure_shortcut.call_args.args[:2],
                     (destination / GAME_EXECUTABLE, app_id),
                 )
+                install_redists.assert_called_once()
+                self.assertEqual(
+                    prerequisite_prompt.call_args.args[0],
+                    [installer_prerequisites.VC2010_NAME],
+                )
+                self.assertEqual(
+                    install_redists.call_args.args[0],
+                    [installer_prerequisites.VC2010_NAME],
+                )
+                self.assertEqual(setup_order, ["prerequisites", "steam"])
                 launch_steam.assert_called_once_with(root / "Steam")
                 self.assertEqual((destination / TEXT_FILE).read_text(encoding="utf-8"), app_id)
                 url_hash = hashlib.sha256(
@@ -276,6 +349,57 @@ class SafeExtractTests(unittest.TestCase):
                 self.assertEqual(saved_state["phase"], "complete")
                 self.assertEqual(saved_state["destination"], str(destination.resolve()))
                 self.assertTrue((root / "state" / f"download-{url_hash}.zip").is_file())
+
+    def test_install_skips_prerequisite_prompt_when_all_runtime_dlls_are_present(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            destination = root / "install"
+            download_path = root / "download.zip.part"
+
+            def create_test_zip(_: str, path: Path, *_args: object) -> Path:
+                completed_path = path.with_suffix("")
+                with zipfile.ZipFile(completed_path, "w") as archive:
+                    archive.writestr(
+                        "blacklightretribution/Binaries/Win32/game.exe",
+                        b"game",
+                    )
+                return completed_path
+
+            prompt = Mock(return_value=True)
+            with (
+                patch.object(
+                    installer_service,
+                    "missing_windows_prerequisites",
+                    return_value=[],
+                ),
+                patch.object(
+                    installer_service,
+                    "download_zip",
+                    side_effect=create_test_zip,
+                ),
+                patch.object(
+                    installer_service,
+                    "configure_steam_shortcut",
+                    return_value=(1234, root / "Steam"),
+                ),
+            ):
+                installer_service.run_install(
+                    "https://example.test/game.zip",
+                    root / "state.json",
+                    download_path,
+                    {
+                        "destination": str(destination),
+                        "steam_app_id": "480",
+                        "phase": "downloading",
+                        "completed_members": [],
+                        "current_member_index": None,
+                        "current_member_bytes": 0,
+                        "extraction_progress": {},
+                    },
+                    on_prerequisites_prompt=prompt,
+                )
+
+            prompt.assert_not_called()
 
     def test_completed_install_prompts_to_launch_and_keeps_completion_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -639,6 +763,43 @@ class SafeExtractTests(unittest.TestCase):
         with patch("builtins.input", return_value=""):
             self.assertFalse(installer_ui.prompt_launch_steam())
 
+    def test_prompt_prerequisites_lists_missing_components_and_accepts_yes(self) -> None:
+        output = io.StringIO()
+        with (
+            patch("builtins.input", side_effect=("invalid", "yes")) as input_prompt,
+            redirect_stdout(output),
+        ):
+            accepted = installer_ui.prompt_install_prerequisites(
+                [installer_prerequisites.VC2012_NAME]
+            )
+
+        self.assertTrue(accepted)
+        self.assertIn(installer_prerequisites.VC2012_NAME, output.getvalue())
+        self.assertIn("administrator approval", input_prompt.call_args.args[0])
+
+    def test_gui_indeterminate_progress_starts_for_prerequisite_stage(self) -> None:
+        window = object.__new__(installer_gui.InstallerWindow)
+        window.events = installer_gui.queue.Queue()
+        window.events.put(("progress", ("Prerequisites: Installing VC runtime", 0, None)))
+        window.progress_stage = None
+        window.progress_sample_time = None
+        window.progress_sample_bytes = 0
+        window.progress_rate = None
+        window.progress_is_indeterminate = False
+        window.progress = Mock()
+        window.status_var = Mock()
+        window.worker = None
+
+        with patch.object(installer_gui.time, "monotonic", return_value=10.0):
+            window._poll_events()
+
+        window.progress.configure.assert_called_with(mode="indeterminate")
+        window.progress.start.assert_called_once_with(12)
+        self.assertIn(
+            "Prerequisites: Installing VC runtime",
+            window.status_var.set.call_args.args[0],
+        )
+
     def test_completed_install_can_be_reinstalled_with_saved_settings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -669,6 +830,7 @@ class SafeExtractTests(unittest.TestCase):
                 __: Path,
                 ___: Path,
                 saved_state: dict[str, object],
+                **_kwargs: object,
             ) -> None:
                 self.assertEqual(saved_state["phase"], "downloading")
                 saved_state["phase"] = "complete"
@@ -1122,6 +1284,7 @@ class SafeExtractTests(unittest.TestCase):
         window.progress_sample_time = 10.0
         window.progress_sample_bytes = 0
         window.progress_rate = 1_000
+        window.progress_is_indeterminate = False
         window.progress = Mock()
         window.status_var = Mock()
         window.worker = None

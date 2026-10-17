@@ -43,13 +43,15 @@ asks whether to delete an existing cached ZIP now or keep it for the next
 reinstall. If unchecked during an interrupted installation, the ZIP remains
 available for resuming and is removed after installation completes.
 
-On Windows, after the game installation is complete, the GUI offers a separate
-“Install Windows prerequisites” action for DirectX June 2010 and the Microsoft
-Visual C++ 2010 and 2012 x86 runtimes. Each setup requests administrator
-approval through Windows UAC. The installer reports setup failures and whether
-Windows needs to restart, but never restarts automatically. These redistributable
-installers are bundled into the Windows executable, increasing its size by
-about 116 MB; they are not bundled into Linux builds.
+On Windows, before configuring the Steam shortcut, the installer checks for the
+DirectX June 2010 and Microsoft Visual C++ 2010 and 2012 x86 runtime DLLs. It
+prompts to install only missing prerequisites; declining continues installation
+without them. Each setup requests administrator approval through Windows UAC.
+The installer reports setup failures and whether Windows needs to restart, but
+never restarts automatically. The progress bar animates while a prerequisite is
+being installed. These redistributable installers are bundled into the Windows
+executable, increasing its size by about 116 MB; they are not bundled into Linux
+builds.
 
 ## Configure
 

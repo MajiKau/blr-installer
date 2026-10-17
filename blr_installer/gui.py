@@ -29,10 +29,7 @@ from .download import (
     read_resume_metadata,
 )
 from .errors import InstallationPaused
-from .prerequisites import (
-    PrerequisiteResult,
-    install_windows_prerequisites,
-)
+from .prerequisites import PrerequisiteResult
 from .service import install_configured
 from .steam import launch_steam
 from .state import (
@@ -67,6 +64,7 @@ class InstallerWindow:
         self.progress_sample_time: float | None = None
         self.progress_sample_bytes = 0
         self.progress_rate: float | None = None
+        self.progress_is_indeterminate = False
 
         try:
             self.url = load_zip_url()
@@ -90,8 +88,6 @@ class InstallerWindow:
                 self.status_var.set("An installation is already complete.")
                 self.start_button.configure(text="Reinstall")
                 self.launch_button.state(["!disabled"])
-                if self.prerequisites_button is not None:
-                    self.prerequisites_button.state(["!disabled"])
             else:
                 self.status_var.set("An interrupted installation can be resumed.")
                 self.start_button.configure(text="Continue installation")
@@ -181,26 +177,7 @@ class InstallerWindow:
         self.progress.grid(row=8, column=0, columnspan=2, sticky="ew")
 
         actions = ttk.Frame(frame)
-        if sys.platform == "win32":
-            self.prerequisites_button = ttk.Button(
-                frame,
-                text="Install Windows prerequisites",
-                command=self._start_prerequisite_install,
-                state="disabled",
-                bootstyle="secondary",
-            )
-            self.prerequisites_button.grid(
-                row=9,
-                column=0,
-                columnspan=2,
-                sticky="w",
-                pady=(16, 0),
-            )
-            actions_row = 10
-        else:
-            self.prerequisites_button = None
-            actions_row = 9
-        actions.grid(row=actions_row, column=0, columnspan=2, sticky="wes", pady=(20, 0))
+        actions.grid(row=9, column=0, columnspan=2, sticky="wes", pady=(20, 0))
         self.launch_button = ttk.Button(
             actions,
             text="Launch through Steam",
@@ -534,8 +511,6 @@ class InstallerWindow:
         self.status_var.set("Preparing installation...")
         self.progress.configure(mode="determinate", value=0)
         self.operation = "install"
-        if self.prerequisites_button is not None:
-            self.prerequisites_button.state(["disabled"])
         steam_app_id = (
             STEAM_OPTIONS["1"][1]
             if self.owned_app_id_var.get()
@@ -559,6 +534,18 @@ class InstallerWindow:
             response.wait()
             return answer[0]
 
+        def prompt_to_install_prerequisites(missing: list[str]) -> bool:
+            response = threading.Event()
+            answer: list[bool] = []
+            self.events.put(("prerequisites_prompt", (missing, response, answer)))
+            response.wait()
+            return answer[0]
+
+        def show_prerequisite_results(results: list[PrerequisiteResult]) -> None:
+            response = threading.Event()
+            self.events.put(("prerequisites_results", (results, response)))
+            response.wait()
+
         def worker() -> None:
             try:
                 steam_root = install_configured(
@@ -568,6 +555,8 @@ class InstallerWindow:
                     self.pause_event,
                     prompt_to_close_steam,
                     choose_steam_user,
+                    on_prerequisites_prompt=prompt_to_install_prerequisites,
+                    on_prerequisites_result=show_prerequisite_results,
                 )
             except InstallationPaused:
                 self.events.put(("paused", None))
@@ -579,53 +568,6 @@ class InstallerWindow:
                 self.events.put(("stopped", None))
 
         self.worker = threading.Thread(target=worker, name="installer-worker", daemon=True)
-        self.worker.start()
-        self.root.after(100, self._poll_events)
-
-    def _start_prerequisite_install(self) -> None:
-        if (
-            self.prerequisites_button is None
-            or self.state is None
-            or self.state.get("phase") != "complete"
-            or (self.worker is not None and self.worker.is_alive())
-        ):
-            return
-        if not messagebox.askyesno(
-            "Install Windows prerequisites",
-            "This installs DirectX June 2010 and the Microsoft Visual C++ 2010 "
-            "and 2012 x86 runtimes required by the game. Windows will ask for "
-            "administrator approval for each setup. The installer will not "
-            "restart your computer automatically.",
-            icon="warning",
-            default=messagebox.NO,
-            parent=self.root,
-        ):
-            return
-
-        self.operation = "prerequisites"
-        self.prerequisites_button.state(["disabled"])
-        self.start_button.state(["disabled"])
-        self.launch_button.state(["disabled"])
-        self.status_var.set("Preparing Windows prerequisites...")
-
-        def report_progress(message: str) -> None:
-            self.events.put(("prerequisites_progress", message))
-
-        def worker() -> None:
-            try:
-                results = install_windows_prerequisites(report_progress)
-            except Exception as exc:
-                self.events.put(("prerequisites_error", exc))
-            else:
-                self.events.put(("prerequisites_complete", results))
-            finally:
-                self.events.put(("stopped", None))
-
-        self.worker = threading.Thread(
-            target=worker,
-            name="prerequisite-worker",
-            daemon=True,
-        )
         self.worker.start()
         self.root.after(100, self._poll_events)
 
@@ -688,11 +630,17 @@ class InstallerWindow:
                 total = int(total) if total is not None else None
                 rate = self._update_progress_rate(stage, current)
                 if total is None or total == 0:
+                    if not self.progress_is_indeterminate:
+                        self.progress.stop()
                     self.progress.configure(mode="indeterminate")
-                    self.progress.start(12)
+                    if not self.progress_is_indeterminate:
+                        self.progress.start(12)
+                    self.progress_is_indeterminate = True
                     progress_text = f"{stage}: {format_size(current)}"
                 else:
-                    self.progress.stop()
+                    if self.progress_is_indeterminate:
+                        self.progress.stop()
+                        self.progress_is_indeterminate = False
                     self.progress.configure(mode="determinate", value=min(current / total * 100, 100))
                     progress_text = (
                         f"{stage}: {min(current / total, 1):.0%} "
@@ -706,13 +654,30 @@ class InstallerWindow:
                             f" | about {self._format_eta(eta_seconds)} left"
                         )
                 self.status_var.set(progress_text)
-            elif event == "prerequisites_progress":
-                self.status_var.set(str(payload))
-            elif event == "prerequisites_complete":
-                results = payload
+            elif event == "prerequisites_prompt":
+                missing, response, answer = payload  # type: ignore[misc]
+                names = "\n".join(f"- {name}" for name in missing)
+                self.start_button.state(["disabled"])
+                answer.append(
+                    messagebox.askyesno(
+                        "Install missing prerequisites?",
+                        "These Windows game prerequisites are missing:\n\n"
+                        f"{names}\n\n"
+                        "Install them now? Windows will request administrator "
+                        "approval. Choosing No continues installation without "
+                        "installing them.",
+                        icon="warning",
+                        default=messagebox.NO,
+                        parent=self.root,
+                    )
+                )
+                response.set()
+            elif event == "prerequisites_results":
+                results, response = payload  # type: ignore[misc]
                 if not isinstance(results, list) or any(
                     not isinstance(result, PrerequisiteResult) for result in results
                 ):
+                    response.set()
                     self.status_var.set("Windows prerequisite setup returned invalid results.")
                     messagebox.showerror(
                         "Prerequisite setup failed",
@@ -736,13 +701,7 @@ class InstallerWindow:
                     summary,
                     parent=self.root,
                 )
-            elif event == "prerequisites_error":
-                self.status_var.set("Windows prerequisite setup failed.")
-                messagebox.showerror(
-                    "Windows prerequisite setup failed",
-                    str(payload),
-                    parent=self.root,
-                )
+                response.set()
             elif event == "steam_prompt":
                 response, answer = payload  # type: ignore[misc]
                 self.start_button.state(["disabled"])
@@ -776,6 +735,7 @@ class InstallerWindow:
                 response.set()
             elif event == "paused":
                 self.progress.stop()
+                self.progress_is_indeterminate = False
                 self.status_var.set("Paused. Progress is saved; press Continue to resume.")
                 self.start_button.configure(text="Continue installation")
                 self.start_button.state(["!disabled"])
@@ -783,11 +743,10 @@ class InstallerWindow:
                 if self.state is not None:
                     self.state["phase"] = "complete"
                 self.progress.stop()
+                self.progress_is_indeterminate = False
                 self.progress.configure(mode="determinate", value=100)
                 self.start_button.configure(text="Reinstall")
                 self.launch_button.state(["!disabled"])
-                if self.prerequisites_button is not None:
-                    self.prerequisites_button.state(["!disabled"])
                 try:
                     if self.keep_download_var.get():
                         self.status_var.set(
@@ -824,6 +783,7 @@ class InstallerWindow:
                         )
             elif event == "error":
                 self.progress.stop()
+                self.progress_is_indeterminate = False
                 try:
                     self.state = read_job_state(self.state_path, self.url)
                 except ValueError:
@@ -848,12 +808,6 @@ class InstallerWindow:
                 self.destination_entry.state(["!disabled"])
                 self.app_id_checkbox.state(["!disabled"])
                 self.keep_download_checkbox.state(["!disabled"])
-                if (
-                    self.prerequisites_button is not None
-                    and self.state is not None
-                    and self.state.get("phase") == "complete"
-                ):
-                    self.prerequisites_button.state(["!disabled"])
                 if (
                     self.state is not None
                     and self.state.get("phase") == "complete"

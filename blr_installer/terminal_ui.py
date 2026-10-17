@@ -146,6 +146,20 @@ def prompt_launch_steam() -> bool:
         print("Please enter y or n.")
 
 
+def prompt_install_prerequisites(missing: list[str]) -> bool:
+    print("The following Windows game prerequisites appear to be missing:")
+    for name in missing:
+        print(f"  - {name}")
+    while True:
+        choice = input("Install them now? Windows will request administrator approval. [y/N]: ")
+        normalized = choice.strip().lower()
+        if normalized in {"", "n", "no"}:
+            return False
+        if normalized in {"y", "yes"}:
+            return True
+        print("Please enter y or n.")
+
+
 def launch_game(
     destination: Path,
     steam_app_id: str,
