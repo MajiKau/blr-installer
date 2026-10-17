@@ -1,5 +1,7 @@
 # Simple cross-platform installer
 
+![Screenshot of v1.0.0](/screenshot.png)
+
 This interactive installer downloads a ZIP file, extracts it into the selected
 folder, and writes the selected Steam app ID to
 `blacklightretribution/Binaries/Win32/steam_appid.txt` inside that folder.
